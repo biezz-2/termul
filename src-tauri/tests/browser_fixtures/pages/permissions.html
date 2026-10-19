@@ -18,6 +18,8 @@
 // pending: unanswered when the page stops waiting (an engine prompt
 // nobody answered, or a capture device that never responded).
 var WAIT_MS = 8000;
+var pre = 'none';
+navigator.mediaDevices.enumerateDevices().then(function (d) { pre = d.length + ' ' + d.map(function (x) { return x.kind; }).join(','); });
 function settle(id, promise) {
   var line = document.getElementById(id);
   var timer = new Promise(function (resolve) {
@@ -54,7 +56,7 @@ Promise.all([
   settle('geolocation', geo())
 ]).then(function () {
   navigator.mediaDevices.enumerateDevices().then(function (d) {
-    document.getElementById('dbg').textContent = 'dbg: ' + d.length + ' ' + d.map(function (x) { return x.kind; }).join(',') + ' ua=' + navigator.userAgent;
+    document.getElementById('dbg').textContent = 'dbg: pre=' + pre + ' post=' + d.length + ' ' + d.map(function (x) { return x.kind; }).join(',') + ' ua=' + navigator.userAgent;
   });
   document.getElementById('done').textContent = 'Permissions settled';
 });
