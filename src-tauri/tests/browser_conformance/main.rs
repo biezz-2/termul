@@ -38,6 +38,14 @@ const MAIN_WEBVIEW_READY_BUDGET: Duration = Duration::from_secs(20);
 const EXIT_UNEXPECTED: i32 = 1;
 const EXIT_HARNESS: i32 = 2;
 
+/// WebView2 gets a fake camera and microphone so the permissions case proves
+/// the host's refusal rather than a missing device. Only the device switch:
+/// the UI switch would auto-allow the prompt. Other engines refuse capture
+/// before any permission check on a runner without devices.
+const FAKES_CAPTURE_DEVICES: bool = cfg!(windows);
+const FAKE_DEVICE_SWITCH: &str = "--use-fake-device-for-media-stream";
+const WEBVIEW2_ARGS_VAR: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+
 fn expected_for(os: &str) -> &'static str {
     match os {
         "windows" => include_str!("expected/windows.json"),
@@ -133,6 +141,13 @@ fn main() {
     }
 
     host_log::install();
+    if FAKES_CAPTURE_DEVICES {
+        let args = match std::env::var(WEBVIEW2_ARGS_VAR) {
+            Ok(existing) if !existing.is_empty() => format!("{existing} {FAKE_DEVICE_SWITCH}"),
+            _ => FAKE_DEVICE_SWITCH.to_string(),
+        };
+        std::env::set_var(WEBVIEW2_ARGS_VAR, args);
+    }
     // Keeps the webview profile and app data apart from an installed app.
     context.config_mut().identifier = "com.termul-manager.conformance".to_string();
     context.config_mut().app.windows.clear();

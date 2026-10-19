@@ -236,13 +236,20 @@ pub async fn permissions(c: &Ctx<'_>) -> CaseResult {
     let text = c.page_text(&c.tab().await?).await?;
     // A runner without capture devices fails camera and mic before any
     // permission check, so any media error counts; geolocation always asks
-    // and must come back PERMISSION_DENIED (code 1).
+    // and must come back PERMISSION_DENIED (code 1). With a fake capture
+    // device the request reaches the permission check, so the refusal must
+    // be the host's (`NotAllowedError`), not a missing device.
+    let media_refusal = if crate::FAKES_CAPTURE_DEVICES {
+        "denied NotAllowedError"
+    } else {
+        "denied"
+    };
     for line in [
-        "camera: denied",
-        "microphone: denied",
-        "geolocation: denied code 1",
+        format!("camera: {media_refusal}"),
+        format!("microphone: {media_refusal}"),
+        "geolocation: denied code 1".to_string(),
     ] {
-        if !text.contains(line) {
+        if !text.contains(&line) {
             return Err(mismatch(format!("expected \"{line}\": {text}")));
         }
     }
