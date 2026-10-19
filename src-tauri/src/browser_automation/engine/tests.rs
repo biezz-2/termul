@@ -51,6 +51,7 @@ fn capability_table_raises_only_the_named_tiers() {
 fn webview2_declares_isolated_eval_trusted_click_screenshot_file_inputs_and_policy_hooks_and_synthetic_dom_events() {
     let table = webview2::capability_table();
     assert_eq!(table.get(CapabilityId::IsolatedEval), Support::Trusted);
+    assert_eq!(table.get(CapabilityId::PersistentProfile), Support::Trusted);
     assert_eq!(table.get(CapabilityId::PointerClick), Support::Trusted);
     assert_eq!(table.get(CapabilityId::Screenshot), Support::Trusted);
     assert_eq!(table.get(CapabilityId::FileChooser), Support::Trusted);

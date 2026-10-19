@@ -62,6 +62,10 @@ fn webkit_engines_declare_isolated_eval_the_policy_hooks_and_synthetic_input() {
     let facts = isolated_facts();
     assert!(facts.traits.isolated_world);
     assert_eq!(facts.capabilities.get(CapabilityId::IsolatedEval), Support::Trusted);
+    assert_eq!(
+        facts.capabilities.get(CapabilityId::PersistentProfile),
+        crate::browser_automation::engine::profile::persistent_profile_support()
+    );
     for id in [
         CapabilityId::PointerClick,
         CapabilityId::TrustedKey,

@@ -25,6 +25,7 @@ use super::assets::Script;
 use super::cdp::{self, CdpMethod, CdpTransport};
 use super::events::DialogAnswer;
 use super::issue_gate::IssueGate;
+use super::profile;
 use super::{
     BrowserEngine, CapabilityId, ChildFrame, CapabilityTable, EngineError, EngineErrorKind, EngineFacts,
     EngineFuture, EngineTraits, InputMode, Point, Support,
@@ -192,6 +193,10 @@ impl WebView2Engine {
 pub fn capability_table() -> CapabilityTable {
     CapabilityTable::unavailable("not implemented on the WebView2 engine yet")
         .with(CapabilityId::IsolatedEval, Support::Trusted)
+        .with(
+            CapabilityId::PersistentProfile,
+            profile::persistent_profile_support(),
+        )
         .with(CapabilityId::PointerClick, Support::Trusted)
         .with(CapabilityId::Screenshot, Support::Trusted)
         .with(CapabilityId::NavigationIntercept, Support::Trusted)

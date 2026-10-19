@@ -43,6 +43,10 @@ pub fn isolated_facts() -> EngineFacts {
     EngineFacts {
         capabilities: CapabilityTable::unavailable("not implemented on this engine yet")
             .with(CapabilityId::IsolatedEval, Support::Trusted)
+            .with(
+                CapabilityId::PersistentProfile,
+                super::profile::persistent_profile_support(),
+            )
             .with(CapabilityId::PointerClick, Support::Synthetic)
             .with(CapabilityId::TrustedKey, Support::Synthetic)
             .with(CapabilityId::PointerMove, Support::Synthetic)
