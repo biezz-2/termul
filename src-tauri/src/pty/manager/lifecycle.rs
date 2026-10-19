@@ -80,9 +80,60 @@ impl PtyManager {
         Ok(())
     }
 
+    /// Detach a terminal from the manager and release every per-terminal
+    /// record, then terminate its process off the caller's critical path.
+    ///
+    /// The close path (#1300): the renderer awaits this before it removes the
+    /// tab, so the reply must not wait out the PTY teardown chain (a child-exit
+    /// poll, a flusher join and a reader join — up to ~7 s against a stubborn
+    /// child). Detachment and tracker cleanup complete before the reply; the
+    /// child kill and the thread joins happen on a detached blocking task
+    /// nobody waits on. Same invariants as before, off the critical path:
+    ///
+    /// - The instance leaves `terminals` first, so every surface (spawn,
+    ///   attach, list, kill resend) sees it gone as soon as the id resolves.
+    /// - The writer is dropped and the child killed on the blocking task,
+    ///   so the slave end closes and the reader's blocking read returns EOF
+    ///   on the normal (already-exited or well-behaved) paths.
+    /// - The reader and flusher threads are joined with their existing
+    ///   bounded-timeout safety net on the detached task; a leak is impossible
+    ///   because the handles are taken, never re-armed.
+    async fn detach_and_kill(
+        &self,
+        id: &str,
+        instance: Arc<TerminalInstance>,
+        project_id: Option<String>,
+    ) -> Result<(), String> {
+        // Stop tracking (sync operations) — the terminal is already gone from
+        // the map, so no new tracker work can start for it.
+        self.cwd_tracker.stop_tracking(id);
+        self.git_tracker.remove_terminal(id);
+        self.exit_code_tracker.remove_terminal(id);
+        self.terminal_events.remove(id);
+        self.claims.remove(id);
+        self.set_observer.notify(project_id.as_deref());
+
+        // Durability boundary: the kill decision, before the teardown waits.
+        log::info!("[PtyManager] Killing terminal {}", id);
+
+        // Writer drop + child kill + thread joins, off the reply path.
+        let teardown_id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let started = Instant::now();
+            Self::cleanup_terminal_resources_sync(instance, true);
+            log::info!(
+                "[PtyManager] Terminal {} teardown finished in {:?}",
+                teardown_id,
+                started.elapsed()
+            );
+        });
+
+        Ok(())
+    }
     /// Kill a terminal
-    /// This is async because cleanup_terminal_resources_sync uses blocking_lock()
-    /// on AsyncMutex fields, which is forbidden inside tokio async runtime.
+    ///
+    /// The reply returns once the terminal is detached — never after the PTY
+    /// teardown joins (see [`Self::detach_and_kill`]).
     ///
     /// When app window is hidden, kill is deferred to prevent ConPTY lifecycle
     /// issues on Windows where minimize can cause terminal processes to die.
@@ -106,24 +157,7 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
         let project_id = instance.project_id.clone();
-
-        // Wrap blocking cleanup in spawn_blocking to avoid panic
-        let instance_clone = instance.clone();
-        tokio::task::spawn_blocking(move || {
-            Self::cleanup_terminal_resources_sync(instance_clone, true);
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failed for terminal {}: {}", id, e))?;
-
-        // Stop tracking (sync operations, safe to run after spawn_blocking)
-        self.cwd_tracker.stop_tracking(id);
-        self.git_tracker.remove_terminal(id);
-        self.exit_code_tracker.remove_terminal(id);
-        self.terminal_events.remove(id);
-        self.claims.remove(id);
-        self.set_observer.notify(project_id.as_deref());
-
-        Ok(())
+        self.detach_and_kill(id, instance, project_id).await
     }
 
     /// Force-kill bypassing the desktop `is_hidden` deferral. Used by the web
@@ -138,22 +172,7 @@ impl PtyManager {
             .ok_or_else(|| format!("Terminal not found: {}", id))?;
 
         let project_id = instance.project_id.clone();
-
-        let instance_clone = instance.clone();
-        tokio::task::spawn_blocking(move || {
-            Self::cleanup_terminal_resources_sync(instance_clone, true);
-        })
-        .await
-        .map_err(|e| format!("spawn_blocking failed for terminal {}: {}", id, e))?;
-
-        self.cwd_tracker.stop_tracking(id);
-        self.git_tracker.remove_terminal(id);
-        self.exit_code_tracker.remove_terminal(id);
-        self.terminal_events.remove(id);
-        self.claims.remove(id);
-        self.set_observer.notify(project_id.as_deref());
-
-        Ok(())
+        self.detach_and_kill(id, instance, project_id).await
     }
 
     pub fn terminal_events(&self) -> TerminalEventHub {
@@ -276,14 +295,12 @@ impl PtyManager {
     }
 
     /// Kill all terminals (best-effort), used as app-exit safety net.
-    /// This is async because cleanup_terminal_resources_sync uses blocking_lock()
-    /// on AsyncMutex fields, which is forbidden inside tokio async runtime.
+    ///
+    /// Every terminal is detached and its child killed immediately; the
+    /// thread joins run detached so app exit never waits on them (the exit
+    /// path is already bounded by `EXIT_CLEANUP_TIMEOUT`).
     pub async fn kill_all(&self) {
         let ids: Vec<String> = self.terminals.read().keys().cloned().collect();
-
-        let cwd_tracker = self.cwd_tracker.clone();
-        let git_tracker = self.git_tracker.clone();
-        let exit_code_tracker = self.exit_code_tracker.clone();
 
         for id in ids {
             let instance = match self.terminals.write().remove(&id) {
@@ -291,26 +308,10 @@ impl PtyManager {
                 None => continue,
             };
 
-                let project_id = instance.project_id.clone();
-
-            // Wrap blocking cleanup in spawn_blocking to avoid panic
-            let instance_clone = instance.clone();
-            let id_clone = id.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                Self::cleanup_terminal_resources_sync(instance_clone, true);
-            })
-            .await
-            {
-                log::warn!("spawn_blocking failed for terminal {}: {}", id_clone, e);
+            let project_id = instance.project_id.clone();
+            if let Err(e) = self.detach_and_kill(&id, instance, project_id).await {
+                log::warn!("[PtyManager] kill_all failed for terminal {}: {}", id, e);
             }
-
-            // Stop tracking (sync operations)
-            cwd_tracker.stop_tracking(&id);
-            git_tracker.remove_terminal(&id);
-            exit_code_tracker.remove_terminal(&id);
-            self.terminal_events.remove(&id);
-            self.claims.remove(&id);
-            self.set_observer.notify(project_id.as_deref());
         }
     }
 

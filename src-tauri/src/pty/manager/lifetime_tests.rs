@@ -181,3 +181,67 @@ async fn the_sweep_removes_only_the_exited_pty_and_frees_no_live_slot() {
     manager.force_kill(&live.info.id).await.unwrap();
     manager.force_kill(&next.info.id).await.unwrap();
 }
+
+/// #1300: the kill reply must not wait out the PTY teardown chain. The
+/// renderer removes the tab only after this returns, so a child that ignores
+/// SIGTERM must not hold the close hostage for the multi-second joins.
+#[cfg(unix)]
+#[tokio::test]
+async fn kill_returns_before_the_pty_teardown_joins() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(
+            SpawnOptions {
+                program: Some("sh".to_string()),
+                args: Some(vec![
+                    "-c".to_string(),
+                    "trap '' TERM; echo stubborn-marker; sleep 300".to_string(),
+                ]),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .expect("spawn stubborn child");
+
+    let instance = manager.get(&spawned.info.id).expect("tracked");
+    // The child must be up and holding the PTY open for the slow path to be real.
+    for _ in 0..100 {
+        let replay = instance.subscribe_from(0, None);
+        if replay.chunks.iter().any(|c| c.data.contains(b"stubborn-marker")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let started = Instant::now();
+    manager.kill(&spawned.info.id).await.expect("kill");
+
+    // Before the fix this path waited the child-exit poll (~2s), the flusher
+    // join (~2s) and the reader join (~3s). Bound well under the first join
+    // so a regression back to serial waits fails loudly.
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "kill reply took {:?} — the close is waiting on the PTY teardown chain",
+        started.elapsed()
+    );
+    assert!(manager.get(&spawned.info.id).is_none(), "detached immediately");
+
+    // The detached teardown still ends the threads: the reader hits EOF once
+    // the PTY closes (the process is dead or the master is dropped).
+    let mut reader = instance.reader_handle.lock().await;
+    let mut flusher = instance.flusher_handle.lock().await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while (reader.is_some() || flusher.is_some()) && Instant::now() < deadline {
+        // The detached task takes the handles; poll until both are gone.
+        drop(reader);
+        drop(flusher);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        reader = instance.reader_handle.lock().await;
+        flusher = instance.flusher_handle.lock().await;
+    }
+    assert!(
+        reader.is_none() && flusher.is_none(),
+        "the detached teardown never took the thread handles"
+    );
+}
