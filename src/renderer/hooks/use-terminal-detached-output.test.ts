@@ -559,6 +559,72 @@ describe('useTerminalDetachedOutput', () => {
     unmount()
   })
 
+  it('aligns a cap clip that cut a CSI escape mid-sequence (#795)', () => {
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    const { unmount, emit } = mountHook()
+
+    // One oversized chunk: 100 'a's, a device-attributes CSI, 'b's, a line
+    // break, then the tail. The clip keeps the newest cap chars, landing at
+    // position 103 — inside the CSI — so the buffered head starts with the
+    // fragment `1;2c`. Replaying that into a terminal prints it as literal
+    // text (#795's doubled/overlapping screen). The flush must re-anchor the
+    // head to the first line break after the fragment.
+    const cap = 1_500_000
+    const chunk = 'a'.repeat(100) + '\x1b[?1;2c' + 'b'.repeat(cap - 8) + '\r\nEND'
+    emit('pty-a', chunk)
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    const appended = mockAppendTranscript.mock.calls[0]?.[1] as string
+    // The fragment and everything before the first line break were dropped;
+    // the delta starts on a complete line and keeps the tail intact.
+    expect(appended).toBe('END')
+    unmount()
+  })
+
+  it('aligns a cap clip that split a surrogate pair (#795)', () => {
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    const { unmount, emit } = mountHook()
+
+    // The clip boundary lands between the two code units of the astral char
+    // at positions 101/102: the kept head begins with an orphaned low
+    // surrogate. No line break exists in this stream, so the flush falls
+    // back to dropping the lone low surrogate so the replay writes a valid
+    // string.
+    const cap = 1_500_000
+    const chunk = 'a'.repeat(101) + '𝐀' + 'b'.repeat(cap - 3) + '𝐀'
+    emit('pty-a', chunk)
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    const appended = mockAppendTranscript.mock.calls[0]?.[1] as string
+    // The orphaned low surrogate is gone; the surviving astral char at the
+    // tail is intact and unpaired.
+    expect(appended).toBe('b'.repeat(cap - 3) + '𝐀')
+    unmount()
+  })
+
+  it('aligns a head exposed by a whole-chunk drop (#795)', () => {
+    mockFindTerminalByPtyId.mockReturnValue({ rendererAttachmentCount: 0, isAppHidden: false })
+    const { unmount, emit } = mountHook()
+
+    // The first chunk is dropped whole once the buffer passes the cap, so
+    // the joined head becomes the second chunk's start — which the stream
+    // split mid-escape. The flush must align that head too, not only the
+    // residual exact-position clip.
+    const cap = 1_500_000
+    emit('pty-a', 'a'.repeat(10))
+    emit('pty-a', '1;2c\r\nDONE' + 'y'.repeat(cap - 8))
+    runScheduledFrames()
+
+    expect(mockAppendTranscript).toHaveBeenCalledTimes(1)
+    const appended = mockAppendTranscript.mock.calls[0]?.[1] as string
+    // Exactly cap chars remained (no residual clip), but the head still
+    // started with the `1;2c` fragment and was aligned past the line break.
+    expect(appended).toBe('DONE' + 'y'.repeat(cap - 8))
+    unmount()
+  })
+
   const EURO = [0xe2, 0x82, 0xac]
 
   it('renders a multi-byte character split across two chunks intact', () => {

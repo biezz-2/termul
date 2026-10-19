@@ -81,7 +81,43 @@ interface PendingBuffer {
    * would lose data the pre-coalescing code captured synchronously.
    */
   capturedDetached: boolean
+  /**
+   * True once the buffer lost head bytes to the cap trim (a whole-chunk drop
+   * or the residual exact-position clip). The clip position is arbitrary: it
+   * can split a surrogate pair or land inside a CSI/OSC escape the stream was
+   * still writing, leaving the buffer's head a partial character or an
+   * escape fragment like `[?1;2c`. Replaying that into a terminal prints it
+   * as literal text and derails the relative cursor-up/erase-line redraws
+   * TUIs such as Claude Code (Ink) depend on — the doubled and overlapping
+   * text of #795. The flush aligns a flagged head before appending it (see
+   * `alignClippedHead`); an unclipped head is untouched.
+   */
+  headClipped: boolean
   dropTimer: ReturnType<typeof setTimeout> | null
+}
+
+const LINE_BREAK_PATTERN = /\r\n|\r|\n/
+
+/**
+ * Align a head that the cap clip may have cut mid-character or mid-chunk:
+ * skip past the first line break (a CSI/OSC escape never spans `\n`, `\r` or
+ * `\r\n`, and a TUI's relative cursor-up/erase-line redraws stay in sync only
+ * when the replayed delta starts at a line boundary), or — for a stream with
+ * no break anywhere in the kept window — drop a lone leading low surrogate so
+ * the replay writes a valid string. Line-alignment keeps whole rendered lines
+ * intact and matches the store's own head trims (`alignTranscriptTail`).
+ */
+function alignClippedHead(head: string): string {
+  const breakMatch = LINE_BREAK_PATTERN.exec(head)
+  if (breakMatch) {
+    return head.slice(breakMatch.index + breakMatch[0].length)
+  }
+  const code = head.length > 0 ? head.charCodeAt(0) : 0
+  // Leading low surrogate: the clip orphaned the high surrogate before it.
+  if (code >= 0xdc00 && code <= 0xdfff) {
+    return head.slice(1)
+  }
+  return head
 }
 
 /**
@@ -91,17 +127,23 @@ interface PendingBuffer {
  * head-first transcript truncation: whole head chunks drop while two or more
  * remain, then the residual overflow is clipped at the exact position — a
  * 1.49M-char chunk followed by a 20k-char chunk keeps the newest 1.5M chars,
- * and a single oversized chunk is clipped from its head too.
+ * and a single oversized chunk is clipped from its head too. Any head loss
+ * sets `headClipped` so the flush re-anchors the head before appending (the
+ * clip position itself is not a character or escape boundary).
  */
 function pushChunk(buffer: PendingBuffer, chunk: string): void {
   buffer.chunks.push(chunk)
   buffer.totalChars += chunk.length
   // Whole-chunk drops while at least two chunks remain (cheap, common path).
+  // Every head byte lost to the cap trim marks the buffer: the cut point is
+  // arbitrary and may split a surrogate or an in-progress escape, so the
+  // flush must align the head before appending it.
   while (
     buffer.chunks.length > 1 &&
     buffer.totalChars - buffer.chunks[0].length >= MAX_TRANSCRIPT_CHARS
   ) {
     buffer.totalChars -= buffer.chunks.shift()!.length
+    buffer.headClipped = true
   }
   // Clip the residual overflow at the exact position: keep the newest
   // MAX_TRANSCRIPT_CHARS chars of the buffered stream.
@@ -109,6 +151,7 @@ function pushChunk(buffer: PendingBuffer, chunk: string): void {
     const excess = buffer.totalChars - MAX_TRANSCRIPT_CHARS
     buffer.chunks[0] = buffer.chunks[0].slice(excess)
     buffer.totalChars = MAX_TRANSCRIPT_CHARS
+    buffer.headClipped = true
   }
 }
 
@@ -218,7 +261,25 @@ export function useTerminalDetachedOutput(): void {
           continue
         }
 
-        const joined = buffer.chunks.join('')
+        // A cap-clipped head may start mid-escape or mid-character; align it
+        // before it is appended so no partial-sequence fragment ever reaches
+        // the transcript (the store's head alignment only fires on its own
+        // trim, which this delta can precede).
+        let joined = buffer.chunks.join('')
+        if (buffer.headClipped) {
+          const aligned = alignClippedHead(joined)
+          if (aligned.length !== joined.length) {
+            // Boundary log (CAP-5-style): the cap clip cut the stream
+            // mid-character or mid-escape and the alignment dropped the
+            // fragment bytes. No transcript content is logged.
+            void logFrontendError({
+              level: 'info',
+              source: 'terminal.detachedOutput',
+              message: `Cap-clipped buffer head re-aligned before transcript append: dropped ${joined.length - aligned.length} fragment char(s) for pty ${ptyId.slice(0, 12)}`
+            })
+          }
+          joined = aligned
+        }
         dropBuffer(ptyId)
 
         store.appendTranscript(ptyId, joined)
@@ -255,7 +316,13 @@ export function useTerminalDetachedOutput(): void {
         if (!buffer) {
           // Create via pushChunk so the very first chunk is cap-checked and
           // clipped (a lone oversized chunk must not bypass the bound).
-          buffer = { chunks: [], totalChars: 0, capturedDetached: false, dropTimer: null }
+          buffer = {
+            chunks: [],
+            totalChars: 0,
+            capturedDetached: false,
+            headClipped: false,
+            dropTimer: null
+          }
           pendingBuffers.set(ptyId, buffer)
         }
         pushChunk(buffer, dataStr)
@@ -291,6 +358,7 @@ export function useTerminalDetachedOutput(): void {
           chunks: [],
           totalChars: 0,
           capturedDetached: true,
+          headClipped: false,
           dropTimer: null
         }
         pendingBuffers.set(ptyId, buffer)
