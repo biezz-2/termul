@@ -11,6 +11,7 @@
 <p id="microphone">microphone: asking</p>
 <p id="geolocation">geolocation: asking</p>
 <p id="done"></p>
+<p id="dbg">dbg: pending</p>
 </main>
 <script>
 // Every request settles as granted, denied with the error name, or
@@ -52,6 +53,9 @@ Promise.all([
   settle('microphone', media({ audio: true })),
   settle('geolocation', geo())
 ]).then(function () {
+  navigator.mediaDevices.enumerateDevices().then(function (d) {
+    document.getElementById('dbg').textContent = 'dbg: ' + d.length + ' ' + d.map(function (x) { return x.kind; }).join(',') + ' ua=' + navigator.userAgent;
+  });
   document.getElementById('done').textContent = 'Permissions settled';
 });
 </script>
