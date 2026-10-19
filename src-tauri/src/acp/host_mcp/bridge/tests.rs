@@ -86,6 +86,61 @@ fn no_mount_is_a_typed_canvas_closed() {
 }
 
 #[test]
+fn a_call_outside_an_active_turn_is_no_active_turn_not_canvas_closed() {
+    // The issue-1429 regression: a background-task wake-up calls a canvas
+    // tool between turns, and the canvas is open. The refusal must name the
+    // real condition, not CANVAS_CLOSED with its "ask the user to open the
+    // canvas" guidance.
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    harness
+        .server()
+        .end_turn(&configs[0].agent_id, "sess-1");
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
+        Some(Ok(r#""never reached""#.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let error = error_of(bridge.call("document.inspect", json!({})));
+    assert_eq!(error["code"], "NO_ACTIVE_TURN");
+    assert!(
+        !error["message"]
+            .as_str()
+            .unwrap()
+            .contains("canvas is not open"),
+        "the guidance must not claim the canvas is closed: {}",
+        error["message"]
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("prompt turn"),
+        "the guidance names the real condition: {}",
+        error["message"]
+    );
+}
+
+#[test]
+fn an_ambiguous_binding_is_ambiguous_active_session_not_canvas_closed() {
+    let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
+    // A second active turn makes the agent's binding ambiguous.
+    harness.server().begin_turn(&configs[0].agent_id, "sess-other");
+    let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
+        Some(Ok(r#""never reached""#.to_string()))
+    });
+    let mut bridge = Bridge::new(configs[0].clone());
+    let error = error_of(bridge.call("document.inspect", json!({})));
+    assert_eq!(error["code"], "AMBIGUOUS_ACTIVE_SESSION");
+    assert!(
+        !error["message"]
+            .as_str()
+            .unwrap()
+            .contains("canvas is not open"),
+        "the guidance must not claim the canvas is closed: {}",
+        error["message"]
+    );
+}
+
+#[test]
 fn a_session_without_a_project_is_canvas_closed() {
     let (_harness, configs) = Harness::new(&[("sess-1", None)]);
     let mut bridge = Bridge::new(configs[0].clone());

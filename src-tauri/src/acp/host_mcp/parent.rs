@@ -464,7 +464,14 @@ impl HostPlanServer {
                         crate::logging::redact_session_id(&bound_session_id),
                         sessions.len()
                     );
-                    return FrameReply::err("ambiguous active session");
+                    // Typed codes keep the canvas `Bridge` from collapsing
+                    // these refusals into CANVAS_CLOSED — whose guidance
+                    // ("ask the user to open the canvas") is wrong advice
+                    // for a canvas that is open (#1429).
+                    return FrameReply::err_code(
+                        "AMBIGUOUS_ACTIVE_SESSION",
+                        "ambiguous active session",
+                    );
                 }
                 _ => {
                     log::warn!(
@@ -472,7 +479,7 @@ impl HostPlanServer {
                         auth.agent_id,
                         crate::logging::redact_session_id(&bound_session_id)
                     );
-                    return FrameReply::err("no active turn");
+                    return FrameReply::err_code("NO_ACTIVE_TURN", "no active turn");
                 }
             }
         };

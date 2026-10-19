@@ -44,6 +44,12 @@ pub enum CanvasErrorCode {
     CanvasHidden,
     CanvasOpenElsewhere,
     CanvasTimeout,
+    /// The call reached the parent outside any active ACP prompt turn (e.g.
+    /// a background-task wake-up between turns), or the agent's session
+    /// binding is one of several active sessions. Not a canvas state: the
+    /// canvas may be open.
+    NoActiveTurn,
+    AmbiguousActiveSession,
     UnsupportedInKiosk,
     UnknownMethod,
     EngineError,
@@ -58,6 +64,8 @@ impl CanvasErrorCode {
             Self::CanvasHidden => "CANVAS_HIDDEN",
             Self::CanvasOpenElsewhere => "CANVAS_OPEN_ELSEWHERE",
             Self::CanvasTimeout => "CANVAS_TIMEOUT",
+            Self::NoActiveTurn => "NO_ACTIVE_TURN",
+            Self::AmbiguousActiveSession => "AMBIGUOUS_ACTIVE_SESSION",
             Self::UnsupportedInKiosk => "UNSUPPORTED_IN_KIOSK",
             Self::UnknownMethod => "UNKNOWN_METHOD",
             Self::EngineError => "ENGINE_ERROR",
@@ -90,6 +98,15 @@ impl CanvasErrorCode {
             Self::CanvasTimeout => Some(
                 "The canvas did not answer in time: retry once, and if it times out again ask \
                  the user to check that the Canvas tab is open and responsive.",
+            ),
+            Self::NoActiveTurn => Some(
+                "Canvas tools run only during a prompt turn: continue with your task after the \
+                 user's next message, then retry the call; do not ask the user to open the \
+                 canvas — it may already be open.",
+            ),
+            Self::AmbiguousActiveSession => Some(
+                "The session this tool call was routed to is ambiguous because the agent has \
+                 several active turns: finish or let the user resolve the sessions, then retry.",
             ),
             Self::UnsupportedInKiosk => Some(
                 "Termul owns the canvas file: save with save_file, export only to a relative \

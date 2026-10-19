@@ -37,7 +37,9 @@ Termul chooses the file and ignores any path you pass. Do not create or edit .fi
 .op files on disk, do not call open_file, and do not look for other design tools, MCP servers or \
 canvas apps: these tools are the canvas. Agents cannot open the canvas. A CANVAS_CLOSED error \
 means it is not open, so ask the user to open it with the Canvas button in Termul's left rail, \
-then retry. The canvas editor is FigCraft, and the rest of this section is its own guide.";
+then retry. A NO_ACTIVE_TURN error means only that canvas tools run during a prompt turn: the \
+canvas may be open; continue your task after the user's next message, then retry. The canvas \
+editor is FigCraft, and the rest of this section is its own guide.";
 
 /// The canvas part of the session `instructions`.
 #[must_use]

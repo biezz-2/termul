@@ -256,6 +256,8 @@ async fn initialize_advertises_the_chat_and_canvas_instructions() {
             "Do not create or edit .figcraft, .pen or .op files",
             "do not look for other design tools",
             "CANVAS_CLOSED",
+            "NO_ACTIVE_TURN",
+            "prompt turn",
             "Canvas button in Termul's left rail",
         ] {
             assert!(instructions.contains(needle), "missing {needle:?}");
