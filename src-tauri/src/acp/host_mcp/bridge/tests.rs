@@ -92,9 +92,7 @@ fn a_call_outside_an_active_turn_is_no_active_turn_not_canvas_closed() {
     // real condition, not CANVAS_CLOSED with its "ask the user to open the
     // canvas" guidance.
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
-    harness
-        .server()
-        .end_turn(&configs[0].agent_id, "sess-1");
+    harness.server().end_turn(&configs[0].agent_id, "sess-1");
     let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
         Some(Ok(r#""never reached""#.to_string()))
     });
@@ -110,10 +108,7 @@ fn a_call_outside_an_active_turn_is_no_active_turn_not_canvas_closed() {
         error["message"]
     );
     assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("prompt turn"),
+        error["message"].as_str().unwrap().contains("prompt turn"),
         "the guidance names the real condition: {}",
         error["message"]
     );
@@ -123,7 +118,9 @@ fn a_call_outside_an_active_turn_is_no_active_turn_not_canvas_closed() {
 fn an_ambiguous_binding_is_ambiguous_active_session_not_canvas_closed() {
     let (harness, configs) = Harness::new(&[("sess-1", Some("proj-1"))]);
     // A second active turn makes the agent's binding ambiguous.
-    harness.server().begin_turn(&configs[0].agent_id, "sess-other");
+    harness
+        .server()
+        .begin_turn(&configs[0].agent_id, "sess-other");
     let _seen = mount_renderer(&harness.router(), "conn-a", "proj-1", 1, |_| {
         Some(Ok(r#""never reached""#.to_string()))
     });
