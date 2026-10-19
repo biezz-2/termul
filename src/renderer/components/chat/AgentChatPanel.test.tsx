@@ -461,6 +461,12 @@ vi.mock('./PlanPanel', () => ({
     return null
   }
 }))
+// Issue #1434: the desktop plan column. The sidebar hosts a real PlanPanel
+// (variant="dock"); stub the column itself so existing PlanPanel prop
+// assertions keep reading the inline fallback's mount.
+vi.mock('./PlanSidebar', () => ({
+  PlanSidebar: () => null
+}))
 vi.mock('./chat-timeline', () => {
   return {
     buildTimeline: (

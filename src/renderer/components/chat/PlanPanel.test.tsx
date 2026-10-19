@@ -187,6 +187,46 @@ describe('PlanPanel', () => {
     expect(screen.getByText('First task').parentElement).not.toHaveClass('line-through')
     expect(screen.getByText('Second task')).toHaveClass('line-through')
   })
+
+  describe('dock variant (plan sidebar column, issue #1434)', () => {
+    const entries = [
+      { content: 'One', status: 'completed' },
+      { content: 'Two', status: 'in_progress' }
+    ]
+
+    it('drops the inline card chrome and fills the column height', () => {
+      const { container } = render(<PlanPanel entries={entries} variant="dock" />)
+
+      // No card chrome: the section is a plain full-height column, not the
+      // inline rounded card.
+      const section = container.querySelector('section')
+      expect(section).not.toHaveClass('rounded-lg')
+      expect(section).not.toHaveClass('bg-card/30')
+      expect(section).toHaveClass('flex')
+      expect(section).toHaveClass('h-full')
+    })
+
+    it('bounds the body by the column, not the inline max-h-60', () => {
+      const { container } = render(<PlanPanel entries={entries} variant="dock" />)
+      const scroller = container.querySelector('.overflow-y-auto')
+      expect(scroller).not.toHaveClass('max-h-60')
+      expect(scroller).toHaveClass('flex-1')
+    })
+
+    it('keeps the header toggle, counts and collapse behaviour', async () => {
+      const { container } = render(<PlanPanel entries={entries} variant="dock" />)
+      const toggle = screen.getByRole('button', { name: /Plan, 1 of 2 tasks, task in progress/ })
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+      fireEvent.click(toggle)
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      // CollapseExpandMotion unmounts the body after the exit animation
+      // completes; wait for it like the inline tests do.
+      await waitFor(() => {
+        expect(container.querySelector('.overflow-y-auto')).not.toBeInTheDocument()
+      })
+    })
+  })
 })
 
 describe('TermulPlanRenderer (termul-plan fence renderer)', () => {

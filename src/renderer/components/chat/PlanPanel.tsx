@@ -20,6 +20,13 @@ interface PlanPanelProps {
    * afterwards the bar shows the user's last own state.
    */
   forceCollapsed?: boolean
+  /**
+   * Docked side column (issue #1434): the panel fills the plan sidebar's
+   * column — no card chrome, no horizontal gutter, body bounded by the
+   * column instead of `max-h-60`. Default keeps the inline card look used
+   * by the mobile bar and the historical `termul-plan` fence.
+   */
+  variant?: 'inline' | 'dock'
 }
 
 const PRIORITY_LABEL: Record<string, string> = {
@@ -117,7 +124,8 @@ function EntryLabel({ entry }: { entry: PlanEntry }): React.JSX.Element {
 export function PlanPanel({
   entries,
   defaultCollapsed = false,
-  forceCollapsed = false
+  forceCollapsed = false,
+  variant = 'inline'
 }: PlanPanelProps): React.JSX.Element {
   const reduced = useReducedMotion() ?? false
   // Collapse state is component-local: it survives `entries` changes so
@@ -126,6 +134,7 @@ export function PlanPanel({
   const { collapsed, toggle } = useForcedCollapse(defaultCollapsed, forceCollapsed)
   // Unique id per PlanPanel instance so the sticky panel and an inline
   // historical renderer never collide on `id="plan-panel-body"`.
+  const docked = variant === 'dock'
   const bodyId = useId()
   const completed = entries.filter((e) => e.status === 'completed').length
   const inProgressCount = entries.filter((e) => e.status === 'in_progress').length
@@ -145,9 +154,13 @@ export function PlanPanel({
           transition={reduced ? { duration: 0 } : CHAT_SPRING_SOFT}
           className="shrink-0"
         >
-          <div className={cn(CHAT_GUTTER_X, 'py-2')}>
+          <div className={docked ? 'flex h-full min-h-0 flex-col py-2' : cn(CHAT_GUTTER_X, 'py-2')}>
             <section
-              className="mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 ring-1 ring-border/50"
+              className={
+                docked
+                  ? 'flex h-full min-h-0 w-full flex-col overflow-hidden'
+                  : 'mx-auto w-full max-w-3xl overflow-hidden rounded-lg bg-card/30 ring-1 ring-border/50'
+              }
               aria-label="Execution plan"
             >
               <button
@@ -159,8 +172,8 @@ export function PlanPanel({
                   hasInProgress ? `, ${inProgressLabel}` : ''
                 }`}
                 className={cn(
-                  'flex w-full items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  CHAT_HIT_MIN_H
+                  'flex w-full shrink-0 items-center gap-1.5 px-3 py-2 text-left text-2xs font-semibold text-muted-foreground transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  docked ? 'min-h-10' : CHAT_HIT_MIN_H
                 )}
               >
                 <ListChecks size={12} className="shrink-0" aria-hidden="true" />
@@ -180,12 +193,19 @@ export function PlanPanel({
                   aria-hidden="true"
                 />
               </button>
-              <CollapseExpandMotion open={!collapsed} motion="chat">
+              <CollapseExpandMotion
+                open={!collapsed}
+                motion="chat"
+                className={docked ? 'flex min-h-0 flex-1 flex-col' : undefined}
+              >
                 <div
                   id={bodyId}
                   // Native overflow: Radix ScrollArea viewport is `h-full` and
                   // does not scroll when the parent only sets max-height.
-                  className="scroller-thin max-h-60 overflow-y-auto overscroll-contain border-t border-border/40"
+                  className={cn(
+                    'scroller-thin overflow-y-auto overscroll-contain border-t border-border/40',
+                    docked ? 'min-h-0 flex-1' : 'max-h-60'
+                  )}
                 >
                   <Accordion type="single" collapsible className="flex flex-col px-2 pb-1.5 pt-0.5">
                     {entries.map((entry, i) => {

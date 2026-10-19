@@ -60,6 +60,7 @@ import { ElicitationPrompt } from './ElicitationPrompt'
 import { PendingRestartBanner } from './PendingRestartBanner'
 import { PermissionPrompt } from './PermissionPrompt'
 import { PlanPanel } from './PlanPanel'
+import { PlanSidebar } from './PlanSidebar'
 import { PromptReconcileNotice } from './PromptReconcileNotice'
 import { SubagentPill } from './SubagentPill'
 import { useApprovalDock } from './use-approval-dock'
@@ -908,33 +909,42 @@ export function AgentChatPanel({
         }
         onDismiss={() => setDismissedError(session.lastError)}
       />
-      <PlanPanel
-        key={`plan-${session.id}`}
-        entries={plan}
-        defaultCollapsed={isMobileShell}
-        forceCollapsed={compactDock}
-      />
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <ChatMessageList
-          items={timeline}
-          sessionId={session.id}
-          showRunningIndicator={showRunningIndicator}
-          filePathContext={filePathContext}
-          onEditMessage={seedComposer}
-          onRetry={canOfferRetry ? handleRetry : undefined}
+      {/* Issue #1434: wide panes render the live plan in a dedicated right
+          column; narrow panes and the phone shell keep the inline bar (the
+          column would leave the chat unreadably narrow). The inline fallback
+          is the same PlanPanel with its mobile dock collapse rules. */}
+      <div className="@max-[719px]:block hidden">
+        <PlanPanel
+          key={`plan-${session.id}`}
+          entries={plan}
+          defaultCollapsed={isMobileShell}
+          forceCollapsed={compactDock}
         />
-        {/* Top-right status slot: floats over the transcript (clear of the
-            scrollbar gutter) so status items take no layout height. */}
-        <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
-          <SubagentPill
-            toolCalls={toolCalls}
-            messages={messages}
-            turnActive={session.activeTurn}
+      </div>
+      <div className="relative flex min-h-0 flex-1 flex-row">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <ChatMessageList
+            items={timeline}
+            sessionId={session.id}
+            showRunningIndicator={showRunningIndicator}
             filePathContext={filePathContext}
-            hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
-            isVisible={isVisible}
+            onEditMessage={seedComposer}
+            onRetry={canOfferRetry ? handleRetry : undefined}
           />
+          {/* Top-right status slot: floats over the transcript (clear of the
+              scrollbar gutter) so status items take no layout height. */}
+          <div className="pointer-events-none absolute right-4 top-3.5 z-20 flex items-center gap-1.5">
+            <SubagentPill
+              toolCalls={toolCalls}
+              messages={messages}
+              turnActive={session.activeTurn}
+              filePathContext={filePathContext}
+              hidden={(isMobileShell && osk.isOskOpen) || showTransportOverlay}
+              isVisible={isVisible}
+            />
+          </div>
         </div>
+        <PlanSidebar entries={plan} className="border-l border-border/50 bg-card/30" />
       </div>
       {showPromptReconcile && promptCommand && session.activeTurn && (
         // AD-6: the host has not yet confirmed the last prompt (the connection
