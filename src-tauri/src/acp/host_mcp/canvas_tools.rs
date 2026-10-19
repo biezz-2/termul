@@ -94,6 +94,9 @@ pub fn tools() -> Vec<Tool> {
 /// Run one figcraft tool against the session's canvas. Every failure is a
 /// tool error the agent reads, as in figcraft's own server.
 pub async fn call_tool(config: ChildConfig, name: String, arguments: Value) -> CallToolResult {
+    if let Err(message) = validate_props(&name, &arguments) {
+        return CallToolResult::error(vec![ContentBlock::text(message)]);
+    }
     let ran = tokio::task::spawn_blocking(move || {
         let mut bridge = Bridge::new(config).with_tool(&name);
         figcraft_mcp::call_tool(&mut bridge, &name, &arguments).to_value()
@@ -106,6 +109,91 @@ pub async fn call_tool(config: ChildConfig, name: String, arguments: Value) -> C
     };
     result.unwrap_or_else(|message| CallToolResult::error(vec![ContentBlock::text(message)]))
 }
+
+/// Where a tool's arguments carry `node.set` props: `set_properties` and
+/// `create_node` read a top-level `props` object, `batch` reads
+/// `commands[].params.props` of `node.set` steps, and `run_command` reads
+/// `params` flat for `node.set`.
+fn props_of(tool: &str, arguments: &Value) -> Vec<(String, Option<&Map<String, Value>>)> {
+    let mut found = Vec::new();
+    if tool == "set_properties" || tool == "create_node" {
+        found.push((
+            "`props`".to_string(),
+            arguments.get("props").and_then(Value::as_object),
+        ));
+    } else if tool == "run_command" {
+        if arguments.get("command").and_then(Value::as_str) == Some("node.set") {
+            found.push((
+                "`params`".to_string(),
+                arguments.get("params").and_then(Value::as_object),
+            ));
+        }
+    } else if let Some(Value::Array(steps)) = arguments.get("commands") {
+        for (index, step) in steps.iter().enumerate() {
+            if step.get("command").and_then(Value::as_str) == Some("node.set") {
+                found.push((
+                    format!("step {index} `params.props`"),
+                    step.get("params").and_then(Value::as_object),
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Reject numeric `node.set` props the engine would silently rescale, clamp or
+/// truncate (issue #1423): figcraft's `node.set` treats `opacity: 1.5` as a
+/// percentage (stored `0.015`, a nearly invisible layer), and `width`/`height`
+/// and the corner radii go through `max(0.0)`, so a negative width becomes `0`
+/// or the auto-layout minimum with `ok: true`. Termul owns the boundary the
+/// agent talks to (figcraft is a pinned git dependency), so the ranges are
+/// enforced before the tool runs and in-range values pass through untouched.
+/// The error names the key, where it was and the range, like the engine's own
+/// "`opacity` must be a number" errors.
+fn validate_props(tool: &str, arguments: &Value) -> Result<(), String> {
+    let mut bad: Vec<String> = Vec::new();
+    for (where, props) in props_of(tool, arguments) {
+        let Some(props) = props else { continue };
+        for (key, value) in props {
+            // Flat `run_command` params: the `props` object itself.
+            let (key, value) = if tool == "run_command" && key == "props" {
+                match value.as_object() {
+                    Some(inner) => {
+                        for (inner_key, inner_value) in inner {
+                            check_prop(&format!("{where}.{inner_key}"), inner_key, inner_value, &mut bad);
+                        }
+                        continue;
+                    }
+                    None => continue,
+                }
+            } else {
+                (key.as_str(), value)
+            };
+            check_prop(&format!("{where}.{key}"), key, value, &mut bad);
+        }
+    }
+    if bad.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{}: {}", tool, bad.join("; ")))
+    }
+}
+
+/// One prop against its documented range. Only the keys with a documented
+/// numeric range the engine clamps silently are checked.
+fn check_prop(where: &str, key: &str, value: &Value, bad: &mut Vec<String>) {
+    let range = match key {
+        "opacity" => Some((0.0, 1.0)),
+        "width" | "height" => Some((0.0, f64::MAX)),
+        "cornerRadius" => Some((0.0, f64::MAX)),
+        _ => None,
+    };
+    let Some((min, max)) = range else { return };
+    let Some(number) = value.as_f64() else { return };
+    if !number.is_finite() || number < min || number > max {
+        bad.push(format!("`{where}` must be a finite number between {min} and {max}"));
+    }
+]
 
 /// One resources or prompts request, answered by figcraft's own server.
 pub async fn request<T>(
@@ -159,3 +247,6 @@ fn complete<T: DeserializeOwned>(mut result: Value) -> Result<T, serde_json::Err
     }
     serde_json::from_value(result)
 }
+
+#[cfg(test)]
+mod canvas_tools_tests;
