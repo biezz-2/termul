@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use serde_json::json;
+use tauri::Url;
 
 use super::*;
+use crate::browser_automation::core::authz::HopVerdict;
+use crate::browser_automation::core::ports::{ConsentOption, TicketOutcome};
 use crate::acp::browser_policy::{BrowserPolicyService, CallerScope, LateProfileControl};
 use crate::browser_automation::core::test_support::ScriptedPermissions;
 use crate::browser_automation::core::tests::{
@@ -14,6 +17,7 @@ use crate::browser_automation::core::HostServices;
 /// service wired to the host's profile control as the app wires it.
 struct ProfileHarness {
     h: Harness,
+    permissions: Arc<ScriptedPermissions>,
     policy: Arc<BrowserPolicyService>,
     _policy_root: tempfile::TempDir,
 }
@@ -27,8 +31,11 @@ fn profile_harness(engine_profile: Support) -> ProfileHarness {
         Vec::new(),
         control.clone(),
     ));
+    let permissions = Arc::new(ScriptedPermissions::answering([TicketOutcome::Answered(
+        ConsentOption::AllowSession,
+    )]));
     let services = HostServices {
-        permissions: Arc::new(ScriptedPermissions::default()),
+        permissions: permissions.clone(),
         policy: policy.clone(),
         project_of: Arc::new(|session: &str| session.split(':').next().unwrap_or("").to_string()),
         root_of: Arc::new(|_| None),
@@ -42,6 +49,7 @@ fn profile_harness(engine_profile: Support) -> ProfileHarness {
     control.attach(h.host.profile_control());
     ProfileHarness {
         h,
+        permissions,
         policy,
         _policy_root: policy_root,
     }
@@ -227,6 +235,37 @@ async fn opting_out_closes_that_project_s_global_tabs_and_its_next_tab_is_epheme
 
     let (_, next) = p.open("projA:1").await;
     assert_eq!(next, "ephemeral");
+}
+
+#[tokio::test]
+async fn opting_out_revokes_the_session_s_origin_grants_and_withdraws_its_tickets() {
+    let p = profile_harness(Support::Trusted);
+    let reply = p
+        .h
+        .call_as(
+            "projA:1",
+            "new_tab",
+            json!({ "url": "https://news.example.org/" }),
+        )
+        .await;
+    assert_eq!(reply["ok"], true, "{reply}");
+    let origin = Url::parse("https://news.example.org/").unwrap();
+    assert!(matches!(
+        p.h.host.gate.check_hop("projA:1", &origin),
+        HopVerdict::Allow
+    ));
+    let (kept, _) = p.open("projB:1").await;
+
+    p.project_op("projA", json!({ "op": "set_ephemeral", "ephemeral": true }))
+        .await;
+    p.settle().await;
+
+    assert!(matches!(
+        p.h.host.gate.check_hop("projA:1", &origin),
+        HopVerdict::Ungranted(..)
+    ));
+    assert_eq!(*p.permissions.cancelled_sessions.lock(), ["projA:1"]);
+    assert!(p.h.host.registry.lock().get(&kept).is_some());
 }
 
 #[tokio::test]

@@ -6,9 +6,9 @@
 //! when the app switch is on, the project has not opted out and the engine
 //! can keep a global profile; otherwise ephemeral. Narrowing edits take
 //! effect at once: the global tabs of every session that no longer
-//! qualifies close, and its next tab binds ephemeral. Clearing the global
-//! profile closes every global tab, waits until the engine released them
-//! all, then has the engine wipe the profile.
+//! qualifies close and lose their origin grants, and its next tab binds
+//! ephemeral. Clearing the global profile closes every global tab, waits
+//! until the engine released them all, then has the engine wipe the profile.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
@@ -106,7 +106,8 @@ impl DesktopBrowserHost {
     }
 
     /// Close every global tab of the sessions whose project no longer
-    /// qualifies for the global profile.
+    /// qualifies for the global profile, and revoke those sessions' origin
+    /// grants and pending consent tickets.
     pub(super) async fn reconcile_profiles(&self) {
         let sessions: BTreeSet<String> = self
             .registry
@@ -123,6 +124,7 @@ impl DesktopBrowserHost {
                 );
                 self.close_global_tabs(|session| session == session_id)
                     .await;
+                self.gate.revoke_access(&session_id);
             }
         }
     }

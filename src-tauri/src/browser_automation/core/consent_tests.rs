@@ -387,6 +387,56 @@ async fn stop_denies_the_pending_prompt_revokes_grants_and_latches_until_the_nex
     assert!(after.await.unwrap().is_err());
 }
 
+#[tokio::test]
+async fn revoking_access_drops_grants_and_pending_tickets_but_keeps_an_active_stop() {
+    let perms = Arc::new(ManualPermissions::default());
+    let gate = Arc::new(ConsentGate::new(perms.clone(), Arc::new(InMemoryPolicyStore::default())));
+
+    let granted = tokio::spawn({
+        let gate = gate.clone();
+        async move { authorize(&gate, "s1", "https://granted.example").await }
+    });
+    perms.next_ticket().await;
+    perms.answer(TicketOutcome::Answered(ConsentOption::AllowSession));
+    granted.await.unwrap().unwrap();
+    authorize(&gate, "s1", "https://granted.example").await.unwrap();
+
+    let pending = tokio::spawn({
+        let gate = gate.clone();
+        async move { authorize(&gate, "s1", "https://pending.example").await }
+    });
+    perms.next_ticket().await;
+    gate.revoke_access("s1");
+    let err = tokio::time::timeout(Duration::from_secs(1), pending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        code_reason(&err),
+        ("confirmation_required", Some("consent_cancelled"))
+    );
+    assert!(!gate.is_stopped("s1"), "revoking is not a Stop");
+
+    let again = tokio::spawn({
+        let gate = gate.clone();
+        async move { authorize(&gate, "s1", "https://granted.example").await }
+    });
+    perms.next_ticket().await;
+    assert_eq!(perms.waiting.lock().len(), 1, "the grant was revoked");
+    perms.answer(TicketOutcome::Answered(ConsentOption::Deny));
+    assert!(again.await.unwrap().is_err());
+
+    assert!(gate.stop("s1"));
+    gate.revoke_access("s1");
+    assert!(gate.is_stopped("s1"), "an active Stop survives the revoke");
+    let err = authorize(&gate, "s1", "http://localhost:3000").await.unwrap_err();
+    assert_eq!(
+        code_reason(&err),
+        ("confirmation_required", Some("stopped_by_user"))
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stop_wins_every_race_against_allow() {
     for round in 0..100 {

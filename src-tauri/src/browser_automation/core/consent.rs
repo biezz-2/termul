@@ -421,6 +421,15 @@ impl ConsentGate {
         first
     }
 
+    /// The session's tabs lost the profile its grants were given under:
+    /// revoke its origin grants and withdraw its pending tickets. Unlike
+    /// `stop` it leaves no latch, and unlike `end_session` it keeps an
+    /// active Stop, the taint and the session's state.
+    pub fn revoke_access(&self, session_id: &str) {
+        self.grants.revoke_session(session_id);
+        self.permissions.cancel_session(session_id);
+    }
+
     /// The user's next prompt turn. Returns whether the session was stopped.
     pub fn resume(&self, session_id: &str) -> bool {
         self.stop.resume(session_id)
