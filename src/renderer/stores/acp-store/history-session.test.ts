@@ -274,6 +274,73 @@ describe('acp-store', () => {
     expect(commands).not.toContain('acp_load_session')
   })
 
+  it('openHistorySession attaches the registry MCP servers when the caller omits mcpServers (idle-stop auto-resume, #1420)', async () => {
+    await useAcpStore
+      .getState()
+      .saveAgentConfig({ id: 'cfg-1', name: 'Claude', command: 'claude', args: [], env: {} })
+    seedSession('s-idle', 'agent-old', false)
+    useAcpStore.setState((s) => ({
+      sessions: {
+        ...s.sessions,
+        's-idle': { ...s.sessions['s-idle'], status: 'closed' }
+      },
+      // The registry state `useAcpMcp` loads: two enabled servers plus one
+      // disabled (the disabled entry must NOT reach the wire).
+      mcpServers: [
+        { id: 'm1', type: 'stdio', name: 'canvas', command: 'canvas', args: [], env: [] },
+        { id: 'm2', type: 'http', name: 'context7', url: 'https://c7.example/mcp' },
+        { id: 'm3', type: 'stdio', name: 'off', command: 'off', args: [], env: [], enabled: false }
+      ]
+    }))
+    const { loadSessionPayload } = await import('@/lib/acp-history-persistence')
+    ;(loadSessionPayload as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      metadata: {
+        id: 's-idle',
+        agentId: 'agent-old',
+        agentConfigId: 'cfg-1',
+        title: 'Reaped chat',
+        cwd: '/w',
+        createdAt: 1,
+        lastActivityAt: 2,
+        messageCount: 0,
+        status: 'closed'
+      },
+      messages: []
+    })
+    // No live owner: the reopen spawns a fresh process, exactly like
+    // useIdleStopAutoResume -> openHistorySession(id) with no options.
+    ;(invoke as ReturnType<typeof vi.fn>).mockImplementation(
+      async (command: string, args: Record<string, unknown>) => {
+        if (command === 'acp_spawn_agent') {
+          return {
+            agentId: 'agent-fresh',
+            capabilities: { loadSession: true, mcpCapabilities: { http: true } },
+            authMethods: []
+          }
+        }
+        if (command === 'acp_load_session') return {}
+        return undefined
+      }
+    )
+
+    await useAcpStore.getState().openHistorySession('s-idle')
+
+    const loadCall = vi
+      .mocked(invoke)
+      .mock.calls.find(([command]) => command === 'acp_load_session')
+    expect(loadCall).toBeDefined()
+    expect(loadCall?.[1]).toMatchObject({
+      agentId: 'agent-fresh',
+      sessionId: 's-idle',
+      cwd: '/w',
+      mcpServers: [
+        { type: 'stdio', name: 'canvas', command: 'canvas', args: [], env: [] },
+        { type: 'http', name: 'context7', url: 'https://c7.example/mcp', headers: [] }
+      ]
+    })
+    expect(useAcpStore.getState().sessions['s-idle'].status).toBe('active')
+  })
+
   it('a forced reopen does not load the old agent when the new process fails to start', async () => {
     await useAcpStore
       .getState()
@@ -534,6 +601,9 @@ describe('acp-store', () => {
       agentId: 'agent-r',
       sessionId: 's-resume',
       cwd: '/w',
+      // Issue #1420: an omitted caller list resolves to the registry's (empty
+      // here) — an empty list still asks the host to attach the plan server.
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().toolCalls['s-resume']).toEqual([
@@ -730,6 +800,7 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       sessionId: 's-closed',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     // The local transcript stays visible while (and after) the load: an agent
@@ -1082,6 +1153,7 @@ describe('acp-store', () => {
       agentId: 'agent-1',
       sessionId: 's-closed',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().messages['s-closed']).toHaveLength(1)
@@ -1354,6 +1426,7 @@ describe('acp-store', () => {
       agentId: 'fresh-agent',
       sessionId: 's-reopen',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-reopen'].agentId).toBe('fresh-agent')
@@ -1411,6 +1484,7 @@ describe('acp-store', () => {
       agentId: 'fresh-agent',
       sessionId: 's-cold-start',
       cwd: '/w',
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-cold-start'].status).toBe('active')

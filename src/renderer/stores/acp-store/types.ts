@@ -124,8 +124,10 @@ export interface ChatMessage {
 }
 
 /**
- * Options for one history open. A reload passes the current MCP list and
- * asks for a new agent process. A normal history open omits both.
+ * Options for one history open. A reload passes an explicit MCP list and
+ * asks for a new agent process. A normal history open omits the list and
+ * the store resolves the current registry (issue #1420), so the reopened
+ * agent keeps the host plan server and every configured MCP server.
  */
 export interface OpenHistoryOptions {
   mcpServers?: McpServer[]

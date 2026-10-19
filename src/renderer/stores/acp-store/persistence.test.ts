@@ -354,6 +354,9 @@ describe('acp-store', () => {
       agentId: 'spawned-1',
       sessionId: 's-spawn',
       cwd: '/w',
+      // Issue #1420: the reopened session attaches the registry MCP list
+      // (empty here) even when the caller omitted one.
+      mcpServers: [],
       commandId: expect.any(String)
     })
     expect(useAcpStore.getState().sessions['s-spawn'].agentId).toBe('spawned-1')
