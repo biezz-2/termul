@@ -183,6 +183,39 @@ impl DesktopBrowserHost {
         Ok(fidelity(mode))
     }
 
+    /// Press on the source, move to the target and release there. Both are
+    /// actionable before any button goes down. Where the tier is synthetic
+    /// the page script presses and releases in one document, so both refs
+    /// must live in the same frame.
+    pub(super) async fn drag(
+        &self,
+        tab: &str,
+        from: (&str, &ResolvedRef),
+        to: (&str, &ResolvedRef),
+        deadline: Deadline,
+    ) -> Result<Fidelity, BrowserError> {
+        let mode = self.input_mode(CapabilityId::Drag)?;
+        if mode == InputMode::Synthetic && from.1.node.frame != to.1.node.frame {
+            return Err(BrowserError::capability("this engine drags only within one frame")
+                .with_reason("cross_frame_drag")
+                .with_arg_keys(&["ref", "toRef"]));
+        }
+        let start = self.actionable(tab, from.0, from.1, Need::Activate, deadline).await?;
+        let end = self.actionable(tab, to.0, to.1, Need::Pointer, deadline).await?;
+        let bound = Deadline::after(deadline.clamp(budgets::DRAG_INPUT));
+        match mode {
+            InputMode::Trusted => {
+                let drag = self.engine.drag(tab, start.point, end.point, mode);
+                within(bound, self.input(tab, drag)).await?;
+            }
+            InputMode::Synthetic => {
+                let script = assets::drag(&from.1.node.path, &to.1.node.path);
+                within(bound, self.helper(tab, Some(from.0), Some(&from.1.node), script)).await?;
+            }
+        }
+        Ok(fidelity(mode))
+    }
+
     /// Scroll the page by `dy` with the wheel, or a ref into view (a
     /// programmatic scroll, so synthetic on every engine).
     pub(super) async fn scroll(&self, tab: &str, args: &Value) -> Result<Fidelity, BrowserError> {

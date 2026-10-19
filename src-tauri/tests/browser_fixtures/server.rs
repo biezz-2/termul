@@ -56,6 +56,7 @@ fn route(path: &str) -> Reply {
         "/external.html" => Reply::Page(include_str!("pages/external.html")),
         "/permissions.html" => Reply::Page(include_str!("pages/permissions.html")),
         "/controls.html" => Reply::Page(include_str!("pages/controls.html")),
+        "/drag.html" => Reply::Page(include_str!("pages/drag.html")),
         "/dynamic.html" => Reply::Page(include_str!("pages/dynamic.html")),
         "/console.html" => Reply::Page(include_str!("pages/console.html")),
         "/network.html" => Reply::Page(include_str!("pages/network.html")),

@@ -77,10 +77,18 @@ pub const ACTION_CLICK: Duration = ACTIONABLE
     .saturating_add(INPUT_EVENT)
     .saturating_add(INPUT_EVENT)
     .saturating_add(INPUT_SETTLE);
+/// The press, the moves and the release of a drag, as one cut.
+pub const DRAG_INPUT: Duration = secs(10);
 /// Text verbs click to focus, place the caret, then type or press: more
 /// steps than a click, held to the same bound. Every step is cut at it, so
 /// a slow engine answers `timeout` instead of late.
 pub const ACTION_TEXT: Duration = ACTION_CLICK;
+/// Wait until the source and then the target are actionable, run the
+/// drag, then let the page render it.
+pub const ACTION_DRAG: Duration = ACTIONABLE
+    .saturating_add(ACTIONABLE)
+    .saturating_add(DRAG_INPUT)
+    .saturating_add(INPUT_SETTLE);
 /// A settle loop can start its last readiness probe just before it ends.
 pub const ACTION_HISTORY: Duration = NAV_SETTLE.saturating_add(EVAL_STEP);
 pub const ACTION_NAVIGATE: Duration = TAB_OPEN.saturating_add(ACTION_HISTORY);

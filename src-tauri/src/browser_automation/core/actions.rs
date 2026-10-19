@@ -84,6 +84,15 @@ fn required_ref(args: &Value) -> Result<&str, BrowserError> {
     ref_arg(args)?.ok_or_else(|| BrowserError::invalid("missing 'ref'").with_arg_keys(&["ref"]))
 }
 
+fn required_to_ref(args: &Value) -> Result<&str, BrowserError> {
+    let token = args
+        .get("toRef")
+        .and_then(Value::as_str)
+        .ok_or_else(|| BrowserError::invalid("missing 'toRef'").with_arg_keys(&["toRef"]))?;
+    check_ref(token).map_err(|e| e.with_arg_keys(&["toRef"]))?;
+    Ok(token)
+}
+
 fn mutated(fidelity: Fidelity, tab: TabFacts) -> Success {
     Success {
         fidelity: Some(fidelity),
@@ -281,6 +290,19 @@ impl DesktopBrowserHost {
                 } else {
                     self.hover(&label, token, &resolved, deadline).await?
                 };
+                Ok(mutated(fidelity, self.tab_facts(&label)?))
+            }
+            Verb::Drag => {
+                let label = self.resolve_tab(session_id, args)?;
+                let (token, to_token) = (required_ref(args)?, required_to_ref(args)?);
+                if token == to_token {
+                    return Err(BrowserError::invalid("drag needs two different refs")
+                        .with_reason("same_ref")
+                        .with_arg_keys(&["ref", "toRef"]));
+                }
+                let from = self.resolve_ref(&label, token)?;
+                let to = self.resolve_ref(&label, to_token)?;
+                let fidelity = self.drag(&label, (token, &from), (to_token, &to), deadline).await?;
                 Ok(mutated(fidelity, self.tab_facts(&label)?))
             }
             Verb::Fill => {

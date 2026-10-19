@@ -17,6 +17,7 @@ fn action_arg_keys_pin_the_documented_param_table() {
     assert_eq!(action_arg_keys("press"), &["key", "ref", "tabId"]);
     assert_eq!(action_arg_keys("scroll"), &["dy", "ref", "tabId"]);
     assert_eq!(action_arg_keys("hover"), &["ref", "tabId"]);
+    assert_eq!(action_arg_keys("drag"), &["ref", "toRef", "tabId"]);
     assert_eq!(
         action_arg_keys("wait"),
         &["ms", "text", "textGone", "urlContains", "loadState", "tabId"]

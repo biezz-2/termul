@@ -59,6 +59,7 @@ fn interrupted_fidelity(verb: Verb, host: &DesktopBrowserHost) -> Fidelity {
     };
     match verb {
         Verb::Click | Verb::Check | Verb::Uncheck => tier(CapabilityId::PointerClick),
+        Verb::Drag => tier(CapabilityId::Drag),
         Verb::Navigate | Verb::Back | Verb::Forward | Verb::Reload => Fidelity::Trusted,
         _ => Fidelity::Synthetic,
     }

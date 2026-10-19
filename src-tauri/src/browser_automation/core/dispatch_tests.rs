@@ -4,7 +4,7 @@ use super::*;
 use crate::browser_automation::engine::{CapabilityTable, EngineTraits};
 use crate::browser_automation::{ERR_INVALID_PARAMS, ERR_CAPABILITY};
 
-const ALL_VERBS: [&str; 24] = [
+const ALL_VERBS: [&str; 25] = [
     "navigate",
     "snapshot",
     "screenshot",
@@ -29,6 +29,7 @@ const ALL_VERBS: [&str; 24] = [
     "handle_dialog",
     "console",
     "network",
+    "drag",
 ];
 
 fn no_screenshots() -> EngineFacts {
@@ -66,6 +67,7 @@ fn expected_args_text_comes_from_the_registry() {
         ("scroll", "optional 'dy', 'ref', 'tabId'"),
         ("hover", "'ref' (optional 'tabId')"),
         ("upload", "'ref' and 'path' (optional 'tabId')"),
+        ("drag", "'ref' and 'toRef' (optional 'tabId')"),
         ("wait", "'ms' or 'text' or 'textGone' or 'urlContains' or 'loadState' (optional 'tabId')"),
         ("select_option", "'ref' and 'value' (optional 'tabId')"),
         ("check", "'ref' (optional 'tabId')"),
@@ -163,7 +165,7 @@ fn admit_refuses_unknown_and_withdrawn_verbs_before_any_side_effect() {
     assert_eq!(err.code, ERR_INVALID_PARAMS);
     assert_eq!(
         err.message,
-        "unknown action 'teleport'; valid actions: navigate, snapshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, list_tabs, close_tab, back, forward, reload, select_option, check, uncheck, switch_tab, handle_dialog, console, network"
+        "unknown action 'teleport'; valid actions: navigate, snapshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, list_tabs, close_tab, back, forward, reload, select_option, check, uncheck, switch_tab, handle_dialog, console, network, drag"
     );
 
     let err = admit("screenshot", &mut Value::Null, &facts).unwrap_err();
@@ -201,6 +203,7 @@ fn schema_advertises_every_available_verb_in_flat_and_nested_form() {
         ("url", "string"),
         ("tabId", "string"),
         ("ref", "string"),
+        ("toRef", "string"),
         ("value", "string"),
         ("text", "string"),
         ("key", "string"),
@@ -227,6 +230,7 @@ fn schema_advertises_every_available_verb_in_flat_and_nested_form() {
         "- switch_tab {tabId}:",
         "- list_tabs {}:",
         "- upload {ref, path, tabId?}:",
+        "- drag {ref, toRef, tabId?}:",
     ] {
         assert!(schema.description.contains(line), "missing {line:?}: {}", schema.description);
     }
@@ -271,7 +275,7 @@ fn an_engine_without_an_isolated_world_advertises_no_page_verb_and_does_not_clai
         );
     }
     assert!(schema.description.contains(
-        "Not available on this host: navigate, snapshot, screenshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, back, forward, reload, select_option, check, uncheck, handle_dialog, console, network."
+        "Not available on this host: navigate, snapshot, screenshot, click, fill, type, press, scroll, hover, upload, wait, new_tab, back, forward, reload, select_option, check, uncheck, handle_dialog, console, network, drag."
     ));
     assert!(schema.description.contains("cannot run page helpers in an isolated script world"));
     assert!(!schema.description.contains("page's own script context"));

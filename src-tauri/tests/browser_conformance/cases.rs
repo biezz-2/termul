@@ -67,6 +67,7 @@ pub const CAPABILITIES: &[Capability] = &[
     cap("input_pointer_move", &["navigate"]),
     cap("input_wheel", &["navigate"]),
     cap("input_drag", &["navigate"]),
+    cap("drag", &["snapshot"]),
     cap("focus_retention", &["navigate"]),
     cap("dialog_alert", &["click"]),
     cap("dialog_confirm", &["click"]),
@@ -271,7 +272,7 @@ pub fn expect_code_reason(result: Result<Value, Failure>, code: &str, reason: &s
     }
 }
 
-fn expect_code(result: Result<Value, Failure>, code: &str, what: &str) -> CaseResult {
+pub(crate) fn expect_code(result: Result<Value, Failure>, code: &str, what: &str) -> CaseResult {
     match result {
         Err(f) if f.code == code => Ok(()),
         Err(f) => Err(mismatch(format!("{what}: expected {code}, got {}", f.code))),
@@ -565,6 +566,7 @@ pub async fn run(
         "input_pointer_move" => input_cases::pointer_move(&ctx).await,
         "input_wheel" => input_cases::wheel(&ctx).await,
         "input_drag" => input_cases::drag(&ctx).await,
+        "drag" => input_cases::drag_verb(&ctx).await,
         "focus_retention" => input_cases::focus_retention(&ctx).await,
         "dialog_alert" => events::dialog_alert(&ctx).await,
         "dialog_confirm" => events::dialog_confirm(&ctx).await,

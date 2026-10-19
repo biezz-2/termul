@@ -194,6 +194,9 @@ pub(super) struct FakeEngine {
     facts: EngineFacts,
     pub(super) clicks: Mutex<Vec<(Point, InputMode)>>,
     keys: Mutex<Vec<String>>,
+    /// Every drag: trusted ones as their two points, synthetic ones as
+    /// the two element paths the helper got.
+    drags: Mutex<Vec<String>>,
     fail_trusted_click: bool,
     /// The buttons the snapshot helper reports, by name.
     snapshot_buttons: Vec<&'static str>,
@@ -223,6 +226,20 @@ pub(super) struct FakeEngine {
 }
 
 impl FakeEngine {
+    /// Zero-based index of the button a helper's `path` names (the nth
+    /// button sits 100px right of the one before it).
+    fn button_index(script: &Script) -> usize {
+        script.params["path"]
+            .as_str()
+            .and_then(|p| p.rsplit_once("nth-of-type("))
+            .and_then(|(_, rest)| rest.trim_end_matches(')').parse::<usize>().ok())
+            .map_or(0, |n| n.saturating_sub(1))
+    }
+
+    fn button_named_at(&self, script: &Script) -> &'static str {
+        self.snapshot_buttons.get(Self::button_index(script)).copied().unwrap_or("Sign in")
+    }
+
     pub(super) fn new(capabilities: CapabilityTable) -> Self {
         Self {
             facts: EngineFacts {
@@ -235,6 +252,7 @@ impl FakeEngine {
             },
             clicks: Mutex::new(Vec::new()),
             keys: Mutex::new(Vec::new()),
+            drags: Mutex::new(Vec::new()),
             fail_trusted_click: false,
             snapshot_buttons: vec!["Sign in"],
             facts_patch: json!({}),
@@ -288,12 +306,13 @@ impl BrowserEngine for FakeEngine {
             "resolve" => json!({
                 "rect": { "cx": 12.0, "cy": 34.0 },
                 "role": "button",
-                "name": "Sign in",
+                "name": self.button_named_at(&script),
                 "check": { "checked": *self.checked.lock(), "radio": false },
             }),
             "facts" => {
+                let nth = Self::button_index(&script);
                 let mut facts = json!({
-                    "state": "present", "role": "button", "name": "Sign in", "x": 12.0, "y": 34.0,
+                    "state": "present", "role": "button", "name": self.button_named_at(&script), "x": 12.0 + 100.0 * nth as f64, "y": 34.0,
                     "visible": true, "stable": true, "hit": true, "enabled": true, "kind": "text",
                     "focusOnClick": true
                 });
@@ -309,6 +328,12 @@ impl BrowserEngine for FakeEngine {
             "click" => {
                 let mut checked = self.checked.lock();
                 *checked = !*checked;
+                json!({ "ok": true })
+            }
+            "drag" => {
+                self.drags
+                    .lock()
+                    .push(format!("script {} -> {}", script.params["path"], script.params["to"]));
                 json!({ "ok": true })
             }
             "sensitivity" => self.sensitivity.lock().clone(),
@@ -332,6 +357,11 @@ impl BrowserEngine for FakeEngine {
                 Ok(())
             }
         })
+    }
+    fn drag<'a>(&'a self, _tab: &'a str, from: Point, to: Point, mode: InputMode) -> EngineFuture<'a, ()> {
+        assert_eq!(mode, InputMode::Trusted, "a trusted drag only where declared");
+        self.drags.lock().push(format!("({}, {}) -> ({}, {})", from.x, from.y, to.x, to.y));
+        Box::pin(async { Ok(()) })
     }
     fn element_focus_moves_tab_focus(&self) -> bool {
         self.focus_moves
@@ -583,7 +613,8 @@ async fn every_verb_replies_with_the_closed_shape_and_fidelity_exactly_when_it_m
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("report.pdf"), b"%PDF fake").unwrap();
     let root = project.path().to_path_buf();
-    let engine = FakeEngine::new(webview2_like());
+    let mut engine = FakeEngine::new(webview2_like().with(CapabilityId::Drag, Support::Trusted));
+    engine.snapshot_buttons = vec!["Sign in", "Register"];
     *engine.sensitivity.lock() = json!({ "isFileInput": true });
     let services = HostServices {
         permissions: Arc::new(AllowSession),
@@ -609,6 +640,7 @@ async fn every_verb_replies_with_the_closed_shape_and_fidelity_exactly_when_it_m
         ("check", json!({ "ref": "@e1" }), Some("trusted")),
         ("uncheck", json!({ "ref": "@e1" }), Some("trusted")),
         ("upload", json!({ "ref": "@e1", "path": "report.pdf" }), Some("trusted")),
+        ("drag", json!({ "ref": "@e1", "toRef": "@e2" }), Some("trusted")),
         ("wait", json!({ "ms": 1 }), None),
         ("wait", json!({ "text": "Sign in" }), None),
         ("back", json!({}), Some("trusted")),
@@ -1198,3 +1230,6 @@ async fn where_element_focus_moves_tab_focus_nothing_focuses_an_element() {
 
 #[path = "sensitive_host_tests.rs"]
 mod sensitive;
+
+#[path = "drag_tests.rs"]
+mod drag;

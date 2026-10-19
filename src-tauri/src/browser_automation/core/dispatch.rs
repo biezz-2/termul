@@ -43,6 +43,7 @@ pub enum Verb {
     Console,
     Network,
     Upload,
+    Drag,
 }
 
 impl Verb {
@@ -74,7 +75,8 @@ impl Verb {
             | Verb::SelectOption
             | Verb::Check
             | Verb::Uncheck
-            | Verb::Upload => true,
+            | Verb::Upload
+            | Verb::Drag => true,
         }
     }
 }
@@ -85,6 +87,7 @@ pub enum ArgKey {
     Url,
     TabId,
     Ref,
+    ToRef,
     Value,
     Text,
     Key,
@@ -108,10 +111,11 @@ enum ArgType {
 }
 
 impl ArgKey {
-    const ALL: [ArgKey; 15] = [
+    const ALL: [ArgKey; 16] = [
         ArgKey::Url,
         ArgKey::TabId,
         ArgKey::Ref,
+        ArgKey::ToRef,
         ArgKey::Value,
         ArgKey::Text,
         ArgKey::Key,
@@ -131,6 +135,7 @@ impl ArgKey {
             ArgKey::Url => "url",
             ArgKey::TabId => "tabId",
             ArgKey::Ref => "ref",
+            ArgKey::ToRef => "toRef",
             ArgKey::Value => "value",
             ArgKey::Text => "text",
             ArgKey::Key => "key",
@@ -160,6 +165,7 @@ impl ArgKey {
             ArgKey::Url => "http(s) URL to load.",
             ArgKey::TabId => "Agent tab id: tab.id from a new_tab reply, or data.tabs[].tab.id from list_tabs. Omit to use this session's tab.",
             ArgKey::Ref => "Element ref (@eN) from the latest snapshot.",
+            ArgKey::ToRef => "Element ref (@eN) from the latest snapshot to drop the dragged element on (drag).",
             ArgKey::Value => "Value to set on the element (fill), or the value or label of the option to pick (select_option).",
             ArgKey::Text => "Text to type (type), to wait for (wait), or to answer a prompt dialog with (handle_dialog).",
             ArgKey::Key => "Key to press: one character, or Enter (the default), Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown or Space.",
@@ -257,7 +263,7 @@ pub struct ActionSpec {
 
 use CapabilityId as Cap;
 
-pub static REGISTRY: [ActionSpec; 24] = [
+pub static REGISTRY: [ActionSpec; 25] = [
     ActionSpec {
         verb: Verb::Navigate,
         name: "navigate",
@@ -510,6 +516,16 @@ pub static REGISTRY: [ActionSpec; 24] = [
         mutating: false,
         budget: budgets::ACTION_INSTANT,
         summary: "read the requests the tab's pages made, oldest first; urls carry no query string.",
+    },
+    ActionSpec {
+        verb: Verb::Drag,
+        name: "drag",
+        params: &[req(ArgKey::Ref), req(ArgKey::ToRef), opt(ArgKey::TabId)],
+        one_of: &[],
+        requires: &[Cap::IsolatedEval, Cap::Drag],
+        mutating: true,
+        budget: budgets::ACTION_DRAG,
+        summary: "press on the element ref, move to the element toRef and release there. Both must be in view together. It sends pointer and mouse events only: HTML5 drag-and-drop (draggable elements, dataTransfer) is not supported.",
     },
 ];
 

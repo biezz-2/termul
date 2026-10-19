@@ -49,6 +49,7 @@ fn action_budget(action: &str) -> Duration {
         "fill" | "type" | "press" => ACTION_TEXT,
         "wait" => ACTION_WAIT,
         "select_option" => ACTION_SELECT,
+        "drag" => ACTION_DRAG,
         "check" | "uncheck" => ACTION_TOGGLE,
         "list_tabs" | "close_tab" | "switch_tab" => ACTION_INSTANT,
         _ => ACTION_EVAL,

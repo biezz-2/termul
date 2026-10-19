@@ -17,7 +17,7 @@ fn agent_strings_travel_as_parameters_never_as_script_source() {
 #[test]
 fn helpers_keep_no_page_visible_state_and_never_move_focus() {
     for helper in [
-        SNAPSHOT, RESOLVE, CLICK, FILL, TYPE, PRESS, SCROLL, HOVER, SENSITIVITY, FILE_INPUT, OPEN_FILE_CHOOSER, FACTS,
+        SNAPSHOT, RESOLVE, CLICK, FILL, TYPE, PRESS, SCROLL, HOVER, DRAG, SENSITIVITY, FILE_INPUT, OPEN_FILE_CHOOSER, FACTS,
         PREPARE_TEXT, FOCUSED_EDITABLE, VIEWPORT, SETTLE,
     ] {
         for global in ["window.__", "globalThis", "window[", "localStorage", "sessionStorage"] {

@@ -41,6 +41,7 @@ pub const TYPE: Helper = helper!("type");
 pub const PRESS: Helper = helper!("press");
 pub const SCROLL: Helper = helper!("scroll");
 pub const HOVER: Helper = helper!("hover");
+pub const DRAG: Helper = helper!("drag");
 pub const CONTAINS_TEXT: Helper = helper!("contains_text");
 pub const READY_STATE: Helper = helper!("ready_state");
 pub const FACTS: Helper = helper!("facts");
@@ -155,6 +156,13 @@ pub fn scroll(path: Option<&str>, dy: f64) -> Script {
 /// Synthetic hover events on the element at `path`.
 pub fn hover(path: &str) -> Script {
     Script::new(HOVER, json!({ "path": path }))
+}
+
+/// Synthetic pointer and mouse events that press on the element at `path`,
+/// move in steps to the element at `to` and release there. Both are in the
+/// frame the helper runs in.
+pub fn drag(path: &str, to: &str) -> Script {
+    Script::new(DRAG, json!({ "path": path, "to": to }))
 }
 
 /// The closed sensitivity facts about the element at `path`, or about the

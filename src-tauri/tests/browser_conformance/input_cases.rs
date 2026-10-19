@@ -11,7 +11,7 @@ use termul_manager_lib::conformance_support::{
     EngineError, EngineErrorKind, InputMode, Key, KeyInput, NamedKey, Point, Support,
 };
 
-use crate::cases::{expect_code_reason, find_ref, mismatch, tab_id, CaseResult, Ctx, Failure};
+use crate::cases::{expect_code, expect_code_reason, expect_fidelity, find_ref, mismatch, tab_id, CaseResult, Ctx, Failure};
 
 const READY_WAIT: Duration = Duration::from_secs(10);
 const REPORT_WAIT: Duration = Duration::from_secs(5);
@@ -30,6 +30,7 @@ const HANDLE: Point = Point { x: 50.0, y: 290.0 };
 const HANDLE_TARGET: Point = Point { x: 210.0, y: 290.0 };
 
 const ACTIONABILITY_READY: &str = "Actionability fixture";
+const DRAG_READY: &str = "Drag fixture";
 
 fn is(report: &Value, src: &str, ev: &str) -> bool {
     report["src"] == src && report["ev"] == ev
@@ -301,6 +302,31 @@ pub async fn drag(c: &Ctx<'_>) -> CaseResult {
         ),
         other => Err(unavailable("drag", other)),
     }
+}
+
+/// The `drag` verb on `drag.html`: a slider thumb dragged onto a marker and
+/// a list item onto another, both through pointer events, with the reply's
+/// fidelity matching what the page saw.
+pub async fn drag_verb(c: &Ctx<'_>) -> CaseResult {
+    c.open("/drag.html", DRAG_READY).await?;
+    let snap = c.snapshot().await?;
+    let find = |role: &str, name: &str| {
+        find_ref(&snap.text, role, name).ok_or_else(|| mismatch(format!("no {role} \"{name}\" in {}", snap.text)))
+    };
+    let (thumb, max) = (find("slider", "Volume")?, find("button", "Max")?);
+    let (alpha, charlie) = (find("listitem", "Alpha")?, find("listitem", "Charlie")?);
+    let tier = c.engine.tiers().drag;
+    let seen = if tier == Support::Trusted { "trusted" } else { "synthetic" };
+    for (from, to, result) in [
+        (&thumb, &max, "Volume: 100"),
+        (&alpha, &charlie, "Order: Bravo, Charlie, Alpha"),
+    ] {
+        let reply = c.call("drag", json!({ "ref": from, "toRef": to })).await?;
+        expect_fidelity(&reply, tier, "drag")?;
+        c.call("wait", json!({ "text": result })).await?;
+        c.call("wait", json!({ "text": format!("Events: {seen}") })).await?;
+    }
+    expect_code(c.call("drag", json!({ "ref": thumb })).await, "invalid_params", "drag without a target")
 }
 
 /// The chat keeps focus and sees nothing while the agent tab is clicked
