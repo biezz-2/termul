@@ -20,11 +20,26 @@
 //! | WebView2 | generation folder, one environment shared by object | per-session folder + InPrivate |
 //! | WKWebView | data store named by the generation UUID (macOS 14+) | non-persistent data store |
 //! | WebKitGTK | generation data directory (one context per process) | ephemeral context |
+//!
+//! Agent tabs also never offer to save passwords or fill forms from saved
+//! data. WebView2 has both switches and they are turned off per tab.
+//! WKWebView and WebKitGTK have no password manager or autofill to turn
+//! off. Loopback cookies a past agent page left in the global profile are
+//! deleted once per process, before the first agent tab uses it: WebView2
+//! and WebKitGTK expose cookie deletion by domain. On macOS the cookies
+//! stay: the cookie store of a named data store needs WebKit bindings this
+//! build does not link.
 
+#[cfg(target_os = "linux")]
+mod webkitgtk_cookies;
 #[cfg(target_os = "windows")]
 mod webview2;
+#[cfg(target_os = "windows")]
+mod webview2_settings;
 
 use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -120,6 +135,8 @@ impl Generation {
 pub struct AgentProfiles {
     root: PathBuf,
     current: Mutex<Generation>,
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    loopback_cookies_cleared: AtomicBool,
     #[cfg(target_os = "windows")]
     environments: webview2::Environments,
 }
@@ -143,6 +160,8 @@ impl AgentProfiles {
         Ok(Self {
             root,
             current: Mutex::new(current),
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            loopback_cookies_cleared: AtomicBool::new(false),
             #[cfg(target_os = "windows")]
             environments: webview2::Environments::default(),
         })
@@ -207,12 +226,57 @@ impl AgentProfiles {
     }
 
     /// The engine confirmed `webview`: share its environment with the next
-    /// tabs of the same folder.
-    pub async fn built(&self, webview: &Webview, label: &str) {
+    /// tabs of the same folder, and apply the agent-tab settings to a tab
+    /// that is on an agent profile.
+    pub async fn built(&self, webview: &Webview, label: &str, store: &DataStore) {
         #[cfg(target_os = "windows")]
         self.environments.adopt(webview, label).await;
         #[cfg(not(target_os = "windows"))]
-        let _ = (webview, label);
+        let _ = label;
+        if *store == DataStore::App {
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let clear_cookies = self.should_clear_loopback_cookies(store);
+            let applied = webview.with_webview(move |platform| {
+                // SAFETY: COM call on the UI thread that owns the controller.
+                let Ok(core) = (unsafe { platform.controller().CoreWebView2() }) else {
+                    return;
+                };
+                if !webview2_settings::disable_credential_prompts(&core) {
+                    log::warn!("[browser-profile] password and autofill prompts stay as the runtime defaults");
+                }
+                if clear_cookies && !webview2_settings::clear_loopback_cookies(&core) {
+                    log::warn!("[browser-profile] loopback cookies of the agent profile not cleared");
+                }
+            });
+            if applied.is_err() {
+                log::warn!("[browser-profile] agent tab settings not applied");
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if self.should_clear_loopback_cookies(store) {
+            let applied = webview.with_webview(|platform| {
+                if !webkitgtk_cookies::clear_loopback_cookies(&platform.inner()) {
+                    log::warn!("[browser-profile] loopback cookies of the agent profile not cleared");
+                }
+            });
+            if applied.is_err() {
+                log::warn!("[browser-profile] loopback cookies of the agent profile not cleared");
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let _ = webview;
+    }
+
+    /// True for the first global tab of this process, which sweeps the
+    /// profile's loopback cookies before any agent page of this run could
+    /// have set one.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    fn should_clear_loopback_cookies(&self, store: &DataStore) -> bool {
+        *store == DataStore::Global
+            && !self.loopback_cookies_cleared.swap(true, Ordering::AcqRel)
     }
 
     /// `label`'s webview is gone, or was never built.
@@ -317,6 +381,20 @@ async fn remove_data_store(app: &AppHandle, generation: Generation) -> bool {
         }
     }
     false
+}
+
+/// Whether a cookie's domain attribute names this machine: `localhost`, a
+/// subdomain of it, or a loopback address, with the leading dot and IPv6
+/// brackets cookies may carry.
+#[cfg(any(test, target_os = "windows", target_os = "linux"))]
+fn is_loopback_domain(domain: &str) -> bool {
+    let host = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 #[cfg(test)]

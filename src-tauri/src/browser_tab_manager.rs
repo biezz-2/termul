@@ -158,7 +158,7 @@ impl BrowserTabManager {
         match self.mount(&window, builder, &tab_id, bounds, events.clone()).await {
             Ok(webview) => {
                 if let Ok(profiles) = &self.profiles {
-                    profiles.built(&webview, &tab_id).await;
+                    profiles.built(&webview, &tab_id, &store).await;
                 }
             }
             Err(error) => {

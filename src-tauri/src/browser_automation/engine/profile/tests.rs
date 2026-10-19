@@ -93,3 +93,23 @@ fn deleting_a_missing_directory_is_done() {
     let root = tempfile::tempdir().unwrap();
     assert!(delete_dir(&root.path().join("never-created")));
 }
+
+#[test]
+fn loopback_cookie_domains_are_recognised_with_their_cookie_spellings() {
+    for domain in [
+        "localhost",
+        ".localhost",
+        "app.localhost",
+        "LOCALHOST",
+        "127.0.0.1",
+        ".127.0.0.1",
+        "127.5.5.5",
+        "[::1]",
+        "::1",
+    ] {
+        assert!(is_loopback_domain(domain), "{domain}");
+    }
+    for domain in ["example.com", "localhost.example.com", "notlocalhost", "10.0.0.1", ""] {
+        assert!(!is_loopback_domain(domain), "{domain}");
+    }
+}
