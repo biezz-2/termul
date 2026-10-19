@@ -805,8 +805,18 @@ pub(super) async fn run_command_loop(
                         }
                         Err(detail) => {
                             // A provider failure keeps its stable tag so the
-                            // reply carries the code the error event already has.
-                            let message = crate::acp::provider_errors::tag_provider_error(&detail);
+                            // reply carries the code the error event already
+                            // has. The message is the redacted
+                            // `client_message` (issue #1365): the RPC error's
+                            // `Display` appends the raw `data`, which can
+                            // carry secrets such as request headers, and this
+                            // reply goes to the client that sent the prompt.
+                            // The host log keeps the full text.
+                            let client_message = detail.client_message();
+                            let message = crate::acp::provider_errors::tag_client_error(
+                                &detail,
+                                &client_message,
+                            );
                             if !is_ephemeral {
                                 if let Some(persistence) = &turn_persistence {
                                     if let Err(error) =

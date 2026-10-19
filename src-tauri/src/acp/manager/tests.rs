@@ -385,6 +385,62 @@ fn acp_err_wire_string_tags_auth_required_only() {
     assert_eq!(acp_err_wire_string(other), "Internal error");
 }
 
+/// Issue #1365: the wire string crosses the manager's `Err(String)` boundary
+/// to the client that sent the command, so the raw JSON-RPC `data` the
+/// error's `Display` appends (it can carry request headers) must never ride
+/// along. The reply carries the redacted client message instead.
+#[test]
+fn acp_err_wire_string_drops_the_error_data() {
+    let error = agent_client_protocol::Error::new(-32603, "Internal error").data(
+        serde_json::json!({"headers": {"authorization": "Bearer sk-test"}}),
+    );
+    let wire = acp_err_wire_string(error);
+    assert_eq!(wire, "Internal error");
+    assert!(!wire.contains("sk-test"), "{wire}");
+    assert!(!wire.contains("authorization"), "{wire}");
+}
+
+/// Issue #1365: a provider refusal keeps its stable tag in front of the
+/// redacted client message, never in front of the raw `Display` text.
+#[test]
+fn acp_err_wire_string_tags_a_provider_failure_with_the_client_message() {
+    let error = agent_client_protocol::Error::new(-32603, "rate limited").data(serde_json::json!({
+        "status": 429,
+        "headers": {"authorization": "Bearer sk-test"}
+    }));
+    let wire = acp_err_wire_string(error);
+    assert_eq!(wire, "ACP_PROVIDER_QUOTA_EXCEEDED: rate limited");
+    assert!(!wire.contains("sk-test"), "{wire}");
+}
+
+/// Issue #1365: a secret inside the RPC message itself is masked on the way
+/// out, matching the live `agent_error` message.
+#[test]
+fn acp_err_wire_string_masks_a_secret_in_the_message() {
+    let error =
+        agent_client_protocol::Error::new(-32603, "upstream said Bearer abcdefgh12345678 expired");
+    assert_eq!(
+        acp_err_wire_string(error),
+        "upstream said Bearer [redacted] expired"
+    );
+}
+
+/// Issue #1365: `run_session_reopen` is the path a load/resume failure takes
+/// to the client; the raw `data` (here a bearer token) must not survive it.
+#[tokio::test]
+async fn session_reopen_failure_keeps_no_secret_from_the_error_data() {
+    let state = Mutex::new(DriverState::new());
+    let error = agent_client_protocol::Error::new(-32603, "Internal error")
+        .data(serde_json::json!({"authorization": "Bearer sk-test"}));
+    let outcome = run_session_reopen("session/load", "sess-leak", "/work", &state, async {
+        Err::<LoadSessionResponse, _>(error)
+    })
+    .await;
+    let wire = outcome.unwrap_err();
+    assert_eq!(wire, "Internal error");
+    assert!(!wire.contains("sk-test"), "{wire}");
+}
+
 /// Story 7: an agent `AuthRequired` failure on `session/load` carries the
 /// prefix through `run_session_reopen` (the WS layer maps it to
 /// `agent_auth_required`; the desktop renderer prefix-matches the string).

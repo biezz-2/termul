@@ -679,6 +679,8 @@ duplicate plan UI.
 
 When a *different* prompt is rejected because a turn is already in flight, Rust returns a string containing the stable code `ACP_TURN_IN_PROGRESS` (matched by renderer `ACP_TURN_IN_PROGRESS_CODE` in `prompt-queue-orchestration.ts`; on `/ws` the same case is `err.code: "rate_limited"`). Do not reword this prefix without updating both sides.
 
+An agent-side JSON-RPC failure that fails a prompt, `session/new`, `session/load` or `session/resume` returns the agent's own error message masked and capped (`AcpErrorDetail::client_message`), never the raw JSON-RPC `data` the error's `Display` appends — the same redaction the live `acp:agent_error` message uses (#1365). The provider `ACP_PROVIDER_*` tag, `ACP_AUTH_REQUIRED` and `ACP_RESOURCE_NOT_FOUND` prefixes still lead the string. The host log keeps the full text.
+
 ### `send_prompt` reply and `turnId` dedupe
 
 Every carrier (the WebSocket and the desktop's Tauri channel) runs the same shared service (`src-tauri/src/web/prompt_turn.rs`). The reply is either the ACP stop reason string (the turn ran on this call) or a receipt object for a resend of a `turnId` the host already saw:

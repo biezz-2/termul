@@ -196,14 +196,17 @@ pub fn classify_provider_error(detail: &AcpErrorDetail) -> Option<ProviderErrorK
     None
 }
 
-/// The error string the manager returns for `detail`: prefixed with the
-/// provider tag when it classifies as a provider failure, the bare message
-/// otherwise.
+/// The error string the manager returns to a CLIENT for `detail` (issue
+/// #1365): prefixed with the provider tag when it classifies as a provider
+/// failure, the bare message otherwise. The tag verdict comes from `detail`
+/// (the full detail stays on the host for logs), but `client_message` is the
+/// caller's already-redacted [`AcpErrorDetail::client_message`], so no raw
+/// `data` crosses the `Err(String)` boundary.
 #[must_use]
-pub fn tag_provider_error(detail: &AcpErrorDetail) -> String {
+pub fn tag_client_error(detail: &AcpErrorDetail, client_message: &str) -> String {
     match classify_provider_error(detail) {
-        Some(kind) => format!("{}: {}", kind.prefix(), detail.message),
-        None => detail.message.clone(),
+        Some(kind) => format!("{}: {client_message}", kind.prefix()),
+        None => client_message.to_string(),
     }
 }
 

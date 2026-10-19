@@ -1303,11 +1303,12 @@ impl SessionPersistence {
         Ok(records
             .into_iter()
             .filter(|record| record.seq > cursor)
+            .map(redact_replayed_agent_error)
             .collect())
     }
 
-    /// Load replay records on Tokio's blocking pool so JSONL disk scans never
-    /// stall the async WS runtime.
+    /// Load replay records on Tokio's blocking pool so the JSONL disk scans
+    /// never stall the async WS runtime.
     pub async fn replay_after_async(
         self: &Arc<Self>,
         session_id: String,
@@ -2282,6 +2283,39 @@ impl SessionPersistence {
 /// A fresh log epoch: the identity of one incarnation of a session's log.
 fn mint_log_epoch() -> String {
     Uuid::new_v4().to_string()
+}
+
+/// Issue #1365: an `agent_error` record written before the #1351 redaction
+/// kept the raw JSON-RPC `data` in its `message` (the `Display` text, which
+/// pretty-prints the `data`) and replayed it to every client on reopen. This
+/// re-applies the client-facing redaction on READ: the message is masked and
+/// capped like `AcpErrorDetail::client_message`, and the `data` is
+/// redacted/capped like the live event's. A record written by the current
+/// code already carries the redacted form, and the pass is idempotent (the
+/// mask leaves `[redacted]` alone). Every other event type is untouched.
+fn redact_replayed_agent_error(mut record: PersistedEventRecord) -> PersistedEventRecord {
+    if record.type_ != "agent_error" {
+        return record;
+    }
+    fn mask_text(text: &str) -> String {
+        crate::acp::manager::stderr_ring::redact_line(text)
+            .chars()
+            .take(crate::acp::events::client_error_message_cap())
+            .collect()
+    }
+    if let Some(message) = record.payload.get("message").and_then(Value::as_str) {
+        let masked = mask_text(message);
+        if let Some(payload) = record.payload.as_object_mut() {
+            payload.insert("message".to_string(), Value::String(masked));
+        }
+    }
+    if let Some(data) = record.payload.get("data") {
+        let redacted = crate::acp::events::redact_client_error_data(data);
+        if let Some(payload) = record.payload.as_object_mut() {
+            payload.insert("data".to_string(), redacted);
+        }
+    }
+    record
 }
 
 /// Issue #842: find the turn-id of the LAST `user_prompt` record that has no

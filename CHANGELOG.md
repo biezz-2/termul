@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file.
 ### Bug Fixes
 - **Web** — A timed-out `send_prompt` (socket dropped mid-turn) no longer toasts a send failure: the outcome is unknown until replay delivers `prompt_complete`, so the generic error is downgraded to a transient host log (#844)
 - **ACP** — A rejected durability probe releases its slot so the next over-limit flush retries; probe bookkeeping and clamp-log dedup are cleared on session drop (no phantom pins, no pin resurrection)
+- **ACP** — Every client-facing ACP error string now goes through the same redaction as the live `agent_error` event: a failed `session/new`, `session/load`, `session/resume` or failed prompt reply carries the agent's own error message (masked and capped), never the raw JSON-RPC `data` its `Display` appends, so a credential such as `authorization: Bearer …` inside the error data no longer reaches the client; the host log keeps the full text (#1365)
 
 ## [0.4.52] - 2026-10-19
 

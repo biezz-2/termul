@@ -85,19 +85,24 @@ pub const ACP_RESOURCE_NOT_FOUND_PREFIX: &str = "ACP_RESOURCE_NOT_FOUND";
 /// boundary: `ErrorCode::AuthRequired` gets the [`ACP_AUTH_REQUIRED_PREFIX`]
 /// tag, `ErrorCode::ResourceNotFound` the [`ACP_RESOURCE_NOT_FOUND_PREFIX`]
 /// tag, a recognized provider failure gets its `ACP_PROVIDER_*` tag
-/// ([`tag_provider_error`](crate::acp::provider_errors::tag_provider_error));
-/// every other error stringifies verbatim.
+/// ([`tag_client_error`](crate::acp::provider_errors::tag_client_error));
+/// every other error carries the client-safe message. The message is always
+/// the redacted [`AcpErrorDetail::client_message`] (issue #1365): the RPC
+/// error's `Display` appends the raw `data` pretty-printed, which can carry
+/// secrets such as request headers, and this string reaches every client of
+/// the failed `session/new`, `session/load` and `session/resume` reply. The
+/// host log keeps the full text.
 pub(super) fn acp_err_wire_string(error: agent_client_protocol::Error) -> String {
+    let detail = events::AcpErrorDetail::from(&error);
+    let message = detail.client_message();
     match error.code {
         agent_client_protocol::ErrorCode::AuthRequired => {
-            format!("{ACP_AUTH_REQUIRED_PREFIX}: {error}")
+            format!("{ACP_AUTH_REQUIRED_PREFIX}: {message}")
         }
         agent_client_protocol::ErrorCode::ResourceNotFound => {
-            format!("{ACP_RESOURCE_NOT_FOUND_PREFIX}: {error}")
+            format!("{ACP_RESOURCE_NOT_FOUND_PREFIX}: {message}")
         }
-        _ => {
-            crate::acp::provider_errors::tag_provider_error(&events::AcpErrorDetail::from(&error))
-        }
+        _ => crate::acp::provider_errors::tag_client_error(&detail, &message),
     }
 }
 

@@ -239,23 +239,56 @@ fn tag_round_trips_through_split() {
             ProviderErrorKind::SessionLimit => rpc(-32603, "session limit", None),
             ProviderErrorKind::RequestRejected => rpc(-32603, "x", Some(json!({ "status": 400 }))),
         };
-        let tagged = tag_provider_error(&detail);
+        let tagged = tag_client_error(&detail, &detail.rpc_message().to_string());
         assert!(tagged.starts_with(kind.prefix()));
         let (split_kind, message) = split_provider_tag(&tagged).expect("tagged");
         assert_eq!(split_kind, kind);
-        assert_eq!(message, detail.message);
+        assert_eq!(message, detail.rpc_message());
     }
 }
 
 #[test]
 fn untagged_errors_pass_through_verbatim() {
     let detail = rpc(-32603, "Internal error", None);
-    assert_eq!(tag_provider_error(&detail), "Internal error");
+    assert_eq!(
+        tag_client_error(&detail, detail.rpc_message()),
+        "Internal error"
+    );
     assert_eq!(split_provider_tag("Internal error"), None);
     assert_eq!(
         split_provider_tag("ACP_PROVIDER_QUOTA_EXCEEDED no colon"),
         None
     );
+}
+
+/// Issue #1365: `tag_client_error` tags the verdict but returns the
+/// caller-supplied (already redacted) message, so no raw `data` crosses the
+/// `Err(String)` boundary. The tag still round-trips through
+/// `split_provider_tag`.
+#[test]
+fn tag_client_error_uses_the_caller_message_not_the_detail_message() {
+    let detail = AcpErrorDetail {
+        message: "rate limited: {\n  \"authorization\": \"Bearer sk-test\"\n}".to_string(),
+        code: Some(-32603),
+        data: Some(json!({"status": 429, "authorization": "Bearer sk-test"})),
+        rpc_message_len: Some(u32::try_from("rate limited".len()).unwrap()),
+        timed_out: false,
+        connection_closed: false,
+    };
+    let tagged = tag_client_error(&detail, "rate limited");
+    assert_eq!(tagged, "ACP_PROVIDER_QUOTA_EXCEEDED: rate limited");
+    assert!(!tagged.contains("sk-test"), "{tagged}");
+    let (kind, message) = split_provider_tag(&tagged).expect("tagged");
+    assert_eq!(kind, ProviderErrorKind::QuotaExceeded);
+    assert_eq!(message, "rate limited");
+}
+
+/// Issue #1365: a detail that classifies as no provider failure passes the
+/// caller's message through untouched.
+#[test]
+fn tag_client_error_passes_an_untagged_message_through() {
+    let detail = rpc(-32603, "Internal error: {\n  \"token\": \"sk-test\"\n}", None);
+    assert_eq!(tag_client_error(&detail, "Internal error"), "Internal error");
 }
 
 #[test]

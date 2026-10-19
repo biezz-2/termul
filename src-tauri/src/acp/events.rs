@@ -846,7 +846,7 @@ impl AcpErrorDetail {
             session_id,
             message: self.client_message(),
             code: self.code,
-            data: self.data.as_ref().map(client_error_data),
+            data: self.data.as_ref().map(redact_client_error_data),
             provider_code,
         }
     }
@@ -863,7 +863,7 @@ impl AcpErrorDetail {
             session_id,
             message: self.client_message(),
             code: self.code,
-            data: self.data.as_ref().map(client_error_data),
+            data: self.data.as_ref().map(redact_client_error_data),
         }
     }
 }
@@ -871,13 +871,21 @@ impl AcpErrorDetail {
 /// Most characters of an agent error message that leave the host.
 const CLIENT_ERROR_MESSAGE_MAX_CHARS: usize = 1_000;
 
+/// The same cap, exposed for the session-log replay of `agent_error` records
+/// written before this redaction existed (issue #1365).
+pub(crate) fn client_error_message_cap() -> usize {
+    CLIENT_ERROR_MESSAGE_MAX_CHARS
+}
+
 /// Most characters of serialized agent error `data` that leave the host.
 const CLIENT_ERROR_DATA_MAX_CHARS: usize = 4_000;
 
 /// Agent error `data` as clients see it: secret-named keys dropped (the
 /// session log's redaction), secret-looking text masked, and data larger than
-/// the cap sent as a truncated JSON string.
-fn client_error_data(data: &serde_json::Value) -> serde_json::Value {
+/// the cap sent as a truncated JSON string. `pub(crate)` so the session-log
+/// replay applies the same redaction to `agent_error` records written before
+/// it existed (issue #1365).
+pub(crate) fn redact_client_error_data(data: &serde_json::Value) -> serde_json::Value {
     fn mask_strings(value: serde_json::Value) -> serde_json::Value {
         use serde_json::Value;
         match value {

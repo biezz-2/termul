@@ -177,6 +177,68 @@ async fn first_run_registers_and_round_trips_interleaved_replay() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Issue #1365: an `agent_error` record written BEFORE the #1351 redaction
+/// kept the raw JSON-RPC `data` inside its `message` (the `Display` text) and
+/// replayed it to every client on reopen. `replay_after` must re-apply the
+/// client-facing redaction on read: the token never leaves the host, and a
+/// record already written by the redacting producer is unchanged.
+#[tokio::test]
+async fn replay_after_redacts_a_legacy_agent_error_record() {
+    let root = temp_dir("agent-error-replay-redaction");
+    let (persistence, _metadata) = registered(&root).await;
+    // A pre-#1351 record: the message is the RPC `Display` (message plus the
+    // pretty-printed `data`), and the `data` rides along verbatim.
+    persistence
+        .enqueue_event(payload_record(
+            1,
+            "agent_error",
+            json!({
+                "agentId": "runtime-1",
+                "sessionId": "session-1",
+                "message": "Internal error: {\n  \"authorization\": \"Bearer sk-test-legacy\"\n}",
+                "code": -32603,
+                "data": {"headers": {"authorization": "Bearer sk-test-legacy"}},
+            }),
+        ))
+        .unwrap();
+    // A post-#1351 record: the message is already the client form.
+    persistence
+        .enqueue_event(payload_record(
+            2,
+            "agent_error",
+            json!({
+                "agentId": "runtime-1",
+                "sessionId": "session-1",
+                "message": "Internal error",
+                "code": -32603,
+                "data": {"reason": "login"},
+            }),
+        ))
+        .unwrap();
+    persistence.flush_session("session-1").await.unwrap();
+
+    let replayed = persistence.replay_after("session-1", 0).unwrap();
+    assert_eq!(replayed.len(), 2);
+    let legacy = &replayed[0];
+    let message = legacy.payload.get("message").and_then(Value::as_str).unwrap();
+    assert!(!message.contains("sk-test-legacy"), "{message}");
+    assert!(!message.contains("authorization"), "{message}");
+    let data = legacy.payload.get("data").cloned().unwrap();
+    assert_eq!(
+        data,
+        json!({"headers": {"authorization": "[REDACTED]"}}),
+        "secret-named keys are dropped by the log's sanitize pass"
+    );
+    // The fresh record passes through unchanged.
+    let fresh = &replayed[1];
+    assert_eq!(
+        fresh.payload.get("message"),
+        Some(&Value::String("Internal error".to_string()))
+    );
+    assert_eq!(fresh.payload.get("data"), Some(&json!({"reason": "login"})));
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 async fn register_session_strips_verbatim_cwd_prefix_on_windows() {
