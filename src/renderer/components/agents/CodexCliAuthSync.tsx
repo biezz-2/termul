@@ -38,9 +38,45 @@ export function CodexCliAuthSync(): null {
           before.agentConfigs.find(
             (item) => item.id === before.selectedAgentConfigId && isCodexAcpConfig(item)
           ) ?? before.agentConfigs.find((item) => isCodexAcpConfig(item))
+        const config =
+          before.agentConfigs.find(
+            (item) => item.id === before.selectedAgentConfigId && isCodexAcpConfig(item)
+          ) ?? before.agentConfigs.find((item) => isCodexAcpConfig(item))
         if (!config) return
+        const prefix = `${config.id}\0`
+        // Issue #1372: sample only while a sample can matter. The poll exists
+        // to feed `codexAuthSyncDecision`, which acts only on a login change
+        // of a live codex agent or a pending auth error — with neither, a
+        // `codex login status` sample has no consumer and every 4 s it
+        // spawned the full `codex` launch chain (node shim + native binary)
+        // for nothing. `authBusy` keeps the poll armed so an in-flight
+        // sign-in's transition is still observed.
+        const liveAgents = Object.entries(before.configToLiveAgent).filter(([key]) =>
+          key.startsWith(prefix)
+        )
+        const hasLiveAgent = liveAgents.length > 0
+        const hasAuthError = Object.entries(before.prepareChatErrors).some(
+          ([key, error]) => key.startsWith(prefix) && error.category === 'auth'
+        )
+        const authBusy =
+          isAnyAgentAuthInFlight() ||
+          liveAgents.some(([, agentId]) => Boolean(before.pendingBrowserOpen[agentId]))
+        if (!codexAuthPollWanted({ hasLiveAgent, hasAuthError, authBusy })) return
         const baselineKey = `${config.id}\0${codexHomeFromConfig(config) ?? ''}`
 
+        const status = await invokeIpcWrapped<{ state: CodexCliAuthState }>(
+          'codex_cli_auth_status',
+          { codexHome: codexHomeFromConfig(config) }
+        )
+        if (stopped || !status.success || !status.data) return
+        const next = status.data.state
+        if (next !== 'signed-in' && next !== 'signed-out' && next !== 'unavailable') return
+
+        const live = useAcpStore.getState()
+        const stillSelected = live.agentConfigs.some(
+          (item) => item.id === config.id && isCodexAcpConfig(item)
+        )
+        if (!stillSelected) return
         const status = await invokeIpcWrapped<{ state: CodexCliAuthState }>(
           'codex_cli_auth_status',
           { codexHome: codexHomeFromConfig(config) }
