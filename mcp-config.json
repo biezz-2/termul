@@ -3,21 +3,21 @@
     "open-design": {
       "type": "stdio",
       "command": "npx",
-      "args": ["od", "start", "--mcp"],
+      "args": ["-y", "od", "start", "--mcp"],
       "env": {
-        "OD_PROJECT_ROOT": "/home/biezz/Documents/Project/coding/ai-training",
-        "TERMUL_CANVAS_PORT": "37291"
+        "OD_PROJECT_ROOT": "${workspaceFolder}",
+        "TERMUL_CANVAS_PORT": "${TERMUL_CANVAS_PORT:-37291}"
       }
     },
     "termul": {
       "type": "stdio",
-      "command": "/home/biezz/.local/bin/termul-server",
+      "command": "termul-server",
       "args": ["--internal-mcp-plan-server"],
       "env": {
-        "TERMUL_PLAN_PORT": "37291",
-        "TERMUL_PLAN_TOKEN": "e593c7ec-0a94-499a-a7c4-72c5972cbc48",
-        "TERMUL_PLAN_SESSION_ID": "4b067177-b924-4386-a970-fbf456f2b819",
-        "TERMUL_PLAN_AGENT_ID": "0a63a99e-3e16-4a94-bb4a-6a21cb35f303"
+        "TERMUL_PLAN_PORT": "${TERMUL_PLAN_PORT:-37291}",
+        "TERMUL_PLAN_TOKEN": "${TERMUL_PLAN_TOKEN}",
+        "TERMUL_PLAN_SESSION_ID": "${TERMUL_PLAN_SESSION_ID}",
+        "TERMUL_PLAN_AGENT_ID": "${TERMUL_PLAN_AGENT_ID}"
       }
     }
   }
