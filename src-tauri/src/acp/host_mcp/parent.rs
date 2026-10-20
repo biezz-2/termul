@@ -32,6 +32,9 @@ use crate::web::EventSink;
 
 mod ask;
 mod canvas;
+
+#[cfg(test)]
+mod canvas_batch_tests;
 pub use ask::IdleSignal;
 use ask::PendingAsk;
 

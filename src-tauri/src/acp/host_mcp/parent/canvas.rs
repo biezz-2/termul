@@ -69,9 +69,26 @@ impl HostPlanServer {
             CanvasRoute::Forward => {
                 log::debug!("[canvas-gateway] {tool} {method} for project {project_id}");
                 let timeout = self.call_budget(project_id, &method, parsed.as_ref()).await;
-                self.canvas
+                let outcome = self
+                    .canvas
                     .call_within(project_id, &method, params, timeout)
-                    .await
+                    .await;
+                // A batch that failed inside the editor says which command
+                // failed but not which step of the batch it was, so an agent
+                // debugging a large batch must bisect it by hand. Find the
+                // failing step here and name it.
+                match (&parsed, &outcome) {
+                    (
+                        Some(parsed),
+                        Err(error)
+                            if method == "engine.execute"
+                                && error.code == CanvasErrorCode::EngineError
+                                && is_plain_batch(parsed),
+                    ) => self
+                        .name_failing_batch_step(project_id, &tool, parsed, error, timeout)
+                        .await,
+                    _ => outcome,
+                }
             }
             CanvasRoute::HostSave => {
                 log::info!("[canvas-gateway] {tool} host save for project {project_id}");
@@ -104,6 +121,119 @@ impl HostPlanServer {
             }
             Err(error) => canvas_failure(&error),
         }
+    }
+
+    /// Find which step of a failed `command.batch` failed and name it in the
+    /// error. The engine error names the failing command, but a batch of
+    /// dozens of steps repeats commands, and `$step` references make the
+    /// failing step depend on the whole prefix, so which step failed is only
+    /// findable by running prefixes. Each probe batch is the prefix plus a
+    /// sentinel step that always fails (`command.batch` with `commands: null`
+    /// is a parameter error the engine raises without touching the document),
+    /// so every probe rolls back and the document never changes: verified
+    /// against the pinned engine, where a probe leaves the page's children and
+    /// the undo depth exactly as they were.
+    ///
+    /// Returns the original error untouched when no distinct failing step is
+    /// found (transport errors, malformed batches, a failing step that is
+    /// itself a nested `command.batch`), so a probe can never make the
+    /// agent's answer worse.
+    async fn name_failing_batch_step(
+        &self,
+        project_id: &str,
+        tool: &str,
+        params: &Value,
+        error: &CanvasError,
+        timeout: Duration,
+    ) -> CanvasOutcome {
+        let Some(steps) = params.get("commands").and_then(Value::as_array) else {
+            return Err(error.clone());
+        };
+        // The sentinel's own error: a probe of just the sentinel gives it, and
+        // any probe error different from it means a real step failed first.
+        let Some(sentinel) = self
+            .probe_batch(project_id, tool, &[], timeout)
+            .await
+            .err()
+        else {
+            // The sentinel no longer fails (an engine update): probing would
+            // apply prefixes, so keep the original error.
+            return Err(error.clone());
+        };
+        let sentinel_message = sentinel.message;
+        let full = self
+            .probe_batch(project_id, tool, steps, timeout)
+            .await
+            .err();
+        let Some(full) = full.filter(|full| full.message != sentinel_message) else {
+            // The whole batch's error is the sentinel's (or the batch stopped
+            // failing): nothing to bisect.
+            return Err(error.clone());
+        };
+        // Find the smallest prefix length k whose probe fails before the
+        // sentinel: steps[..k] fails, steps[..k-1] does not, so step k-1
+        // is the first failing step.
+        let mut lo = 0; // probe(steps[..0] + sentinel) is the sentinel error.
+        let mut hi = steps.len();
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            let failed = self
+                .probe_batch(project_id, tool, &steps[..mid], timeout)
+                .await
+                .err()
+                .is_some_and(|probe| probe.message != sentinel_message);
+            if failed {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let Some(step) = steps.get(hi - 1) else {
+            return Err(error.clone());
+        };
+        let command = step.get("command").and_then(Value::as_str).unwrap_or("?");
+        let name = step.get("params").and_then(|p| p.get("name")).and_then(Value::as_str);
+        let step_label = match name {
+            Some(name) => format!("step {} (`{command}` \"{name}\")", hi - 1),
+            None => format!("step {} (`{command}`)", hi - 1),
+        };
+        let full_message = full.message;
+        let message = if full_message.starts_with("invalid parameters for `command.batch`: ") {
+            // The step's own failure, already naming the command.
+            format!("{step_label}: {}", strip_command(&full_message, command))
+        } else {
+            format!("{step_label}: {full_message}")
+        };
+        log::info!(
+            "[canvas-gateway] {tool} command.batch for project {project_id} failed at {}",
+            step_label
+        );
+        Err(CanvasError::new(error.code, message))
+    }
+
+    /// Run `steps` plus the sentinel as one `command.batch` execute. Every
+    /// probe ends in a step that always fails, so the editor rolls it back.
+    async fn probe_batch(
+        &self,
+        project_id: &str,
+        tool: &str,
+        steps: &[&Value],
+        timeout: Duration,
+    ) -> CanvasOutcome {
+        let mut commands: Vec<Value> = steps.iter().map(|step| (*step).clone()).collect();
+        commands.push(serde_json::json!({
+            "command": "command.batch",
+            "params": { "commands": null },
+        }));
+        let execute = serde_json::json!({ "command": "command.batch", "params": { "commands": commands } });
+        let params = execute.to_string();
+        log::debug!(
+            "[canvas-gateway] {tool} command.batch probe of {} steps for project {project_id}",
+            steps.len()
+        );
+        self.canvas
+            .call_within(project_id, "engine.execute", params, timeout)
+            .await
     }
 
     /// How long `method` may take ([`canvas_budget`]).
@@ -275,6 +405,23 @@ fn written_export(result: &str, file: &ProjectFile) -> Result<(Value, Vec<u8>), 
     fields.insert("path".to_string(), Value::String(file.relative.clone()));
     fields.insert("bytes".to_string(), Value::from(bytes.len()));
     Ok((reply, bytes))
+}
+
+/// `params` is an `engine.execute` of `command.batch` that is not itself a
+/// step of a larger batch: a nested batch resolves `$step` references against
+/// its own steps, so a prefix of the outer batch would not repeat its steps.
+fn is_plain_batch(params: &Value) -> bool {
+    params.get("command").and_then(Value::as_str) == Some("command.batch")
+        && params.get("params")
+            .and_then(|p| p.get("commands"))
+            .is_some_and(|commands| commands.is_array())
+}
+
+/// Drop the `` `command` `` prefix from `invalid parameters for \`command\`: rest`
+/// when the step already names the command.
+fn strip_command(message: &str, command: &str) -> &str {
+    let prefix = format!("invalid parameters for `{command}`: ");
+    message.strip_prefix(&prefix).unwrap_or(message)
 }
 
 /// The newest export to each project file, so a late export never replaces
