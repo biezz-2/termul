@@ -59,6 +59,21 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32603, "message": "Internal error",
                             "data": {"status": 400}}})
+        elif text == "oauthlock":
+            # Fail with Claude Code's transient cross-process refresh lock
+            # wording once, then answer the resend (issue #1471).
+            if not hasattr(sys, "oauth_lock_failed"):
+                sys.oauth_lock_failed = True
+                send({"jsonrpc": "2.0", "id": rid,
+                      "error": {"code": -32603,
+                                "message": "Internal error: Failed to refresh OAuth token: "
+                                           "another Claude Code process is refreshing it or "
+                                           "exited mid-refresh. This is usually transient; "
+                                           "retry in a minute",
+                                "data": {"errorKind": "server_error"}}})
+            else:
+                chunk("recovered")
+                send({"jsonrpc": "2.0", "id": rid, "result": {"stopReason": "end_turn"}})
         elif text == "browser":
             subprocess.run([os.environ["BROWSER"], "https://auth.example.com/login?state=mock"],
                            check=True)
@@ -544,6 +559,58 @@ async fn provider_failure_carries_a_stable_code_on_the_event_and_the_reply() {
         .find(|(kind, _)| kind == "agent_error")
         .expect("agent_error event");
     assert!(payload.get("providerCode").is_none());
+    h.finish().await;
+}
+
+/// Issue #1471: a prompt the agent rejects with Claude Code's transient
+/// cross-process OAuth refresh lock error ("another Claude Code process is
+/// refreshing it") is RESENT inside the same accepted turn once the lock
+/// clears, so the message still goes through — no `agent_error`, one
+/// `end_turn` terminator.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oauth_lock_failure_is_retried_and_the_turn_completes() {
+    let Some(mut h) = Harness::start().await else {
+        return;
+    };
+    // Shrink the production retry delay so the test runs in milliseconds.
+    set_oauth_lock_retry_delay_override(Some(Duration::from_millis(50)));
+    assert_eq!(h.run("oauthlock", "t1").await.unwrap(), StopReason::EndTurn);
+    set_oauth_lock_retry_delay_override(None);
+    let events = h.events_through_terminator().await;
+    // The failed first attempt surfaces no agent_error: the turn recovered.
+    assert_eq!(
+        kinds(&events),
+        vec!["user_prompt", "message_chunk", "prompt_complete"]
+    );
+    let done = terminators(&events);
+    assert_eq!(done[0]["stopReason"], "end_turn");
+    assert_eq!(done[0]["turnId"], "t1");
+    h.finish().await;
+}
+
+/// When the lock error persists past the retry budget, the turn fails with the
+/// agent's own wording (one `error` terminator) and the claim is released so
+/// the next prompt runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persistent_oauth_lock_failure_fails_the_turn_after_the_budget() {
+    let Some(mut h) = Harness::start().await else {
+        return;
+    };
+    // A delay past the 90 s budget fails the first retry check.
+    set_oauth_lock_retry_delay_override(Some(Duration::from_secs(120)));
+    let error = h.run("oauthlock", "t1").await.unwrap_err();
+    set_oauth_lock_retry_delay_override(None);
+    assert!(
+        error.contains("another Claude Code process is refreshing it"),
+        "{error}"
+    );
+    let events = h.events_through_terminator().await;
+    assert_eq!(
+        kinds(&events),
+        vec!["user_prompt", "agent_error", "prompt_complete"]
+    );
+    assert_eq!(terminators(&events)[0]["stopReason"], "error");
+    assert_eq!(terminators(&events)[0]["turnId"], "t1");
     h.finish().await;
 }
 

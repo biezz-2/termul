@@ -148,6 +148,26 @@ fn error_kind_of(data: &Value) -> Option<&str> {
     data.get("errorKind").and_then(Value::as_str)
 }
 
+/// True when an agent's JSON-RPC error is the transient cross-process OAuth
+/// refresh lock failure (Claude Code's "another Claude Code process is
+/// refreshing it or exited mid-refresh", its own wording: retry in a minute).
+/// The losing process must wait for the winner's refresh and retry, not fail
+/// the user's turn. The wording, not a code, is the only signal — Claude's
+/// adapter sends it as a plain `-32603` internal error (issue #1471).
+#[must_use]
+pub fn is_oauth_refresh_lock_error(detail: &AcpErrorDetail) -> bool {
+    // Only an RPC reply can carry it: timeouts, closed transports and flush
+    // failures never do.
+    if detail.timed_out || detail.connection_closed || detail.code.is_none() {
+        return false;
+    }
+    let lower = detail.message.to_ascii_lowercase();
+    lower.contains("another claude code process is refreshing it")
+        || lower.contains("exited mid-refresh")
+        || lower.contains(".oauth_refresh.lock")
+        || (lower.contains("failed to refresh oauth token") && lower.contains("refreshing"))
+}
+
 /// Classify an agent error as a provider failure, or `None` when it is not
 /// recognizably one.
 ///

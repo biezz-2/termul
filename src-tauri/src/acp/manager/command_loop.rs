@@ -8,6 +8,47 @@ use crate::acp::legacy_models::{
 };
 use crate::acp::session::PendingElicitation;
 
+use crate::acp::provider_errors::is_oauth_refresh_lock_error;
+
+/// Delay before resending a prompt the agent rejected with the transient
+/// cross-process OAuth refresh lock error (issue #1471). 10 s gives the winning
+/// process time to finish its refresh (observed ~40 s) while the losing turn
+/// keeps its single-flight admission.
+const OAUTH_LOCK_RETRY_DELAY: Duration = Duration::from_secs(10);
+/// Total time a prompt keeps retrying the OAuth refresh lock error. Covers the
+/// winner's refresh (~40 s observed) and Claude's 60 s stale-lock reclaim with
+/// margin; past it the turn fails with the agent's own wording.
+const OAUTH_LOCK_RETRY_BUDGET: Duration = Duration::from_secs(90);
+
+/// Test override for [`OAUTH_LOCK_RETRY_DELAY`]: real-loop tests shrink the
+/// retry cadence so the recover case finishes in milliseconds. `None` (the
+/// default everywhere but tests) keeps the production delay.
+#[cfg(test)]
+static OAUTH_LOCK_RETRY_DELAY_OVERRIDE: std::sync::LazyLock<parking_lot::Mutex<Option<Duration>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(None));
+
+/// The delay used by the OAuth-lock prompt retry
+/// ([`OAUTH_LOCK_RETRY_BUDGET`]): the production
+/// [`OAUTH_LOCK_RETRY_DELAY`], or the in-process test override.
+fn oauth_lock_retry_delay() -> Duration {
+    #[cfg(test)]
+    {
+        OAUTH_LOCK_RETRY_DELAY_OVERRIDE
+            .lock()
+            .unwrap_or(OAUTH_LOCK_RETRY_DELAY)
+    }
+    #[cfg(not(test))]
+    {
+        OAUTH_LOCK_RETRY_DELAY
+    }
+}
+
+/// Set the in-process OAuth-lock retry delay override (test-only).
+#[cfg(test)]
+pub(super) fn set_oauth_lock_retry_delay_override(delay: Option<Duration>) {
+    *OAUTH_LOCK_RETRY_DELAY_OVERRIDE.lock() = delay;
+}
+
 /// The agent driver's main loop: complete `initialize`, then service commands
 /// until shutdown. Runs concurrently with the connection's dispatch actors.
 #[allow(clippy::too_many_arguments)]
@@ -690,14 +731,51 @@ pub(super) async fn run_command_loop(
                     let cancel_state = turn_state.clone();
                     let cancel_session = session_id.clone();
                     let cancel_cx = turn_cx.clone();
+                    // Issue #1471: an agent freshly resumed after long idle can
+                    // reject the prompt with Claude Code's transient
+                    // cross-process OAuth refresh lock error ("another Claude
+                    // Code process is refreshing it or exited mid-refresh").
+                    // The losing process must wait out the winner's refresh and
+                    // resend instead of failing the user's turn, so the request
+                    // is retried within a bounded budget. `content` moves into
+                    // the request and comes back with it (PromptRequest is
+                    // Clone); a resend uses a fresh request.
+                    let prompt_request = PromptRequest::new(&session_id, content);
                     let outcome: Result<StopReason, events::AcpErrorDetail> = race_turn(
                         async {
-                            turn_cx
-                                .send_request(PromptRequest::new(&session_id, content))
-                                .block_task()
-                                .await
-                                .map(|r| r.stop_reason)
-                                .map_err(events::AcpErrorDetail::from)
+                            let mut request = prompt_request.clone();
+                            let deadline = std::time::Instant::now() + OAUTH_LOCK_RETRY_BUDGET;
+                            loop {
+                                let result = turn_cx
+                                    .send_request(request)
+                                    .block_task()
+                                    .await
+                                    .map(|r| r.stop_reason)
+                                    .map_err(events::AcpErrorDetail::from);
+                                let Err(detail) = &result else {
+                                    return result;
+                                };
+                                if !is_oauth_refresh_lock_error(detail) {
+                                    return result;
+                                }
+                                let retry_delay = oauth_lock_retry_delay();
+                                if std::time::Instant::now() + retry_delay > deadline {
+                                    log::warn!(
+                                        "[acp] session {} prompt kept failing on the OAuth \
+                                         refresh lock past {OAUTH_LOCK_RETRY_BUDGET:?}; failing \
+                                         the turn",
+                                        crate::logging::redact_session_id(&log_session.0)
+                                    );
+                                    return result;
+                                }
+                                log::info!(
+                                    "[acp] session {} prompt hit the transient OAuth refresh \
+                                     lock; retrying in {retry_delay:?}",
+                                    crate::logging::redact_session_id(&log_session.0)
+                                );
+                                request = prompt_request.clone();
+                                tokio::time::sleep(retry_delay).await;
+                            }
                         },
                         cancel_rx,
                         &mut idle_rx,

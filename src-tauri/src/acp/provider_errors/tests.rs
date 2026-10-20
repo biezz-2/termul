@@ -231,6 +231,61 @@ fn timeout_and_closed_transport_are_never_provider_failures() {
     assert_eq!(classify_provider_error(&detail), None);
 }
 
+/// The transient OAuth refresh lock wording (issue #1471): matched only on an
+/// RPC reply, never on timeouts, closed transports, or non-Claude failures.
+#[test]
+fn oauth_refresh_lock_error_is_recognized() {
+    let claude_lock = rpc(
+        -32603,
+        "Internal error: Failed to refresh OAuth token: another Claude Code process is \
+         refreshing it or exited mid-refresh. This is usually transient; retry in a minute, \
+         and if it persists close other Claude Code processes or sign in again",
+        Some(json!({ "errorKind": "server_error" })),
+    );
+    assert!(is_oauth_refresh_lock_error(&claude_lock));
+    // Wording fragments that can stand alone (a masked or reformatted copy).
+    assert!(is_oauth_refresh_lock_error(&rpc(-32603, "exited mid-refresh", None)));
+    assert!(is_oauth_refresh_lock_error(&rpc(
+        -32000,
+        "Failed to refresh OAuth token: another Claude Code process is refreshing it",
+        None
+    )));
+    assert!(is_oauth_refresh_lock_error(&rpc(
+        -32000,
+        "EPERM mkdir ~/.claude/.oauth_refresh.lock",
+        None
+    )));
+}
+
+#[test]
+fn oauth_refresh_lock_error_requires_an_rpc_reply() {
+    let matched = rpc(
+        -32603,
+        "another Claude Code process is refreshing it",
+        None,
+    );
+    let mut timed_out = matched.clone();
+    timed_out.timed_out = true;
+    assert!(!is_oauth_refresh_lock_error(&timed_out));
+    let mut closed = matched.clone();
+    closed.connection_closed = true;
+    assert!(!is_oauth_refresh_lock_error(&closed));
+    let mut no_code = matched;
+    no_code.code = None;
+    assert!(!is_oauth_refresh_lock_error(&no_code));
+    // Other refresh failures (a revoked token, a network error) never match.
+    assert!(!is_oauth_refresh_lock_error(&rpc(
+        -32603,
+        "OAuth refresh token is no longer valid; run /login",
+        None
+    )));
+    assert!(!is_oauth_refresh_lock_error(&rpc(
+        -32603,
+        "Internal error",
+        None
+    )));
+}
+
 #[test]
 fn tag_round_trips_through_split() {
     for kind in ProviderErrorKind::ALL {
