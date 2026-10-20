@@ -60,7 +60,7 @@ use types::{
 
 // `crate::pty::manager` public/`pub(crate)` surface preserved via re-export.
 pub use external::ExternalTerminal;
-pub use instance::TerminalInstance;
+pub use instance::{SpawningStream, TerminalInstance};
 pub use limits::{SpawnError, TERMINAL_LIMIT_CODE};
 pub use set_watch::TerminalSetObserver;
 pub(crate) use resolve::{resolve_spawn_program, ResolvedProgram};

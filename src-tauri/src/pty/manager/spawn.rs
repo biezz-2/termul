@@ -190,6 +190,8 @@ impl PtyManager {
             let flusher_output_log = instance.output_log.clone();
             let flusher_output_log_bytes = instance.output_log_bytes.clone();
             let flusher_next_seq = instance.next_output_seq.clone();
+            // #1362: this Channel stream is the desktop's live attachment.
+            let flusher_stream = SpawningStream::take(Arc::clone(&instance), on_data.is_some());
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
@@ -203,6 +205,7 @@ impl PtyManager {
                     flusher_channel,
                     flusher_id,
                 );
+                drop(flusher_stream);
             });
 
             // Spawn reader thread
@@ -345,6 +348,8 @@ impl PtyManager {
             let flusher_output_log = instance.output_log.clone();
             let flusher_output_log_bytes = instance.output_log_bytes.clone();
             let flusher_next_seq = instance.next_output_seq.clone();
+            // #1362: this Channel stream is the desktop's live attachment.
+            let flusher_stream = SpawningStream::take(Arc::clone(&instance), on_data.is_some());
 
             let flusher_task = std::thread::spawn(move || {
                 log::info!("[PTY {}] Flusher thread starting", flusher_id);
@@ -358,6 +363,7 @@ impl PtyManager {
                     flusher_channel,
                     flusher_id,
                 );
+                drop(flusher_stream);
             });
 
             // Spawn reader thread

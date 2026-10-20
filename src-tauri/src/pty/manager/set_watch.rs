@@ -44,7 +44,8 @@ pub struct TerminalSetEntry {
     pub terminal_id: String,
     pub project_id: String,
     pub cwd: String,
-    /// A web connection holds a live attachment.
+    /// A live attachment exists (a web connection, a desktop attach
+    /// forwarder, or the desktop spawn Channel stream).
     pub attached: bool,
 }
 

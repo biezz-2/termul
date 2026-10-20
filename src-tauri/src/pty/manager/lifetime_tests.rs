@@ -181,3 +181,108 @@ async fn the_sweep_removes_only_the_exited_pty_and_frees_no_live_slot() {
     manager.force_kill(&live.info.id).await.unwrap();
     manager.force_kill(&next.info.id).await.unwrap();
 }
+
+/// #1362: a desktop spawn streams output through its spawn Channel, so it
+/// counts as a live attachment. A remote client's `list_preserved` then
+/// issues a SHARED claim instead of replacing the record — the desktop
+/// keeps its credential, and its rotate/revoke/attach keeps working.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_spawn_channel_stream_is_a_live_attachment_that_shields_the_claim() {
+    let manager = crate::web::test_pty_manager();
+    let (channel, _received) = collecting_channel();
+    let spawned = manager
+        .spawn(project_options("a"), Some(channel))
+        .await
+        .expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+
+    assert!(
+        instance.has_live_attachment(),
+        "the spawn Channel stream is a live attachment"
+    );
+
+    // The remote restore's listing: a live attachment offers a SHARED
+    // claim, and the spawner's claim stays valid.
+    let listed = manager.list_preserved("a", None);
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].live_attachment);
+    let shared = listed[0].claim.as_deref().expect("shared claim");
+    assert_ne!(shared, spawned.claim);
+    assert!(
+        manager.verify_claim(&id, &spawned.claim).is_ok(),
+        "the desktop's spawn claim still verifies"
+    );
+    assert!(
+        manager.verify_claim(&id, shared).is_ok(),
+        "the shared claim attaches"
+    );
+
+    manager.force_kill(&id).await.unwrap();
+}
+
+/// A detached spawn (`on_data: None`) has no stream, so it is no live
+/// attachment and a listing re-issues its claim as before.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_detached_spawn_counts_no_live_attachment() {
+    let manager = crate::web::test_pty_manager();
+    let spawned = manager
+        .spawn(project_options("a"), None)
+        .await
+        .expect("spawn");
+    let instance = manager.get(&spawned.info.id).expect("tracked");
+
+    assert!(!instance.has_live_attachment());
+
+    let listed = manager.list_preserved("a", None);
+    assert_eq!(listed.len(), 1);
+    assert!(!listed[0].live_attachment);
+    // A claim-less listing replaced the record: the old claim is dead.
+    assert!(manager.verify_claim(&spawned.info.id, &spawned.claim).is_err());
+
+    manager.force_kill(&spawned.info.id).await.unwrap();
+}
+
+/// The stream's attachment ends with the flusher thread (the PTY exited or
+/// was killed), so the count returns to zero and a listing re-issues again.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_spawn_stream_attachment_ends_when_the_pty_exits() {
+    let manager = crate::web::test_pty_manager();
+    let (channel, _received) = collecting_channel();
+    let spawned = manager
+        .spawn(echo_then_exit("a"), Some(channel))
+        .await
+        .expect("spawn");
+    let id = spawned.info.id.clone();
+    let instance = manager.get(&id).expect("tracked");
+    assert!(instance.has_live_attachment());
+
+    wait_for_exit(&instance).await;
+    wait_for_output_published(&instance).await;
+    assert!(
+        !instance.has_live_attachment(),
+        "the flusher ended, so the stream's attachment is released"
+    );
+
+    manager.force_kill(&id).await.unwrap();
+}
+
+/// A Tauri channel that records the bytes it is sent, for spawn tests.
+#[cfg(unix)]
+fn collecting_channel() -> (
+    tauri::ipc::Channel<tauri::ipc::Response>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+) {
+    let received = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&received);
+    let channel = tauri::ipc::Channel::new(move |body| {
+        if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+            sink.lock().extend(bytes);
+        }
+        Ok(())
+    });
+    (channel, received)
+}

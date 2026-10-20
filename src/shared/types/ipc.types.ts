@@ -450,9 +450,11 @@ export interface PreservedTerminalEntry {
    */
   claim?: string
   /**
-   * #851: `true` when another web connection currently holds a live
-   * output forwarder for this terminal — the renderer labels these as
-   * shared sessions instead of silently duplicating the shell.
+   * #851: `true` when a live output stream currently holds this terminal —
+   * another web connection's forwarder, a desktop attach forwarder, or the
+   * desktop's own spawn channel (the renderer labels these as shared
+   * sessions instead of silently duplicating the shell, and a listing then
+   * issues a shared claim rather than replacing the record).
    */
   hasLiveAttachment?: boolean
 }

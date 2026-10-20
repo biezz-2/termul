@@ -75,13 +75,15 @@ impl TerminalInstance {
         self.exited_at.lock().map(|at| at.elapsed())
     }
 
-    /// Whether a web WS connection or a desktop `terminal_attach` forwarder
-    /// currently streams this terminal's output.
+    /// Whether a web WS connection, a desktop `terminal_attach` forwarder or
+    /// the desktop spawn Channel stream currently streams this terminal's
+    /// output.
     pub fn has_live_attachment(&self) -> bool {
         self.live_attachments.load(Ordering::Acquire) > 0
     }
 
-    /// Record a live attachment (web attach handler or desktop forwarder).
+    /// Record a live attachment (web attach handler, desktop forwarder or
+    /// spawn Channel stream).
     pub fn add_live_attachment(&self) {
         if self.live_attachments.fetch_add(1, Ordering::AcqRel) == 0 {
             self.set_observer.notify(self.project_id.as_deref());
@@ -168,6 +170,35 @@ impl TerminalInstance {
             latest_seq: head_seq,
             log_epoch: self.log_epoch.clone(),
             receiver,
+        }
+    }
+}
+
+/// #1362: the spawn `on_data` Channel stream is a live attachment too. Only
+/// attach forwarders and web attaches were counted, so a desktop terminal
+/// streaming through its spawn Channel looked unattached and a remote
+/// client's `list_preserved` re-issued (and so invalidated) its claim. The
+/// guard is held by the flusher thread, which owns the channel's lifetime:
+/// it ends when the flusher ends (the PTY exited or was killed), never on a
+/// resend — a resend's new channel is dropped and the first one stays bound.
+/// A detached spawn (`on_data: None`) holds no stream, so it counts as no
+/// attachment.
+pub struct SpawningStream(Option<Arc<TerminalInstance>>);
+
+impl SpawningStream {
+    pub fn take(instance: Arc<TerminalInstance>, has_channel: bool) -> Self {
+        if !has_channel {
+            return Self(None);
+        }
+        instance.add_live_attachment();
+        Self(Some(instance))
+    }
+}
+
+impl Drop for SpawningStream {
+    fn drop(&mut self) {
+        if let Some(instance) = self.0.take() {
+            instance.remove_live_attachment();
         }
     }
 }
